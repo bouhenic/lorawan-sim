@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulateur LoRaWAN</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f2;
+  --surface: #fcfcfb;
+  --surface-2: #efefec;
+  --border: #dcdbd6;
+  --text: #0b0b0b;
+  --text-2: #52514e;
+  --text-3: #7a7974;
+  --accent: #2a78d6;
+  --accent-soft: #e3eefb;
+  --series-1: #2a78d6;
+  --good: #0f7b3e;
+  --warn: #a35c00;
+  --bad: #c0302f;
+  --down: #1f6fb2;
+  --grid: #e6e5e1;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface: #1a1a19;
+    --surface-2: #232321;
+    --border: #34332f;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --text-3: #8f8e86;
+    --accent: #3987e5;
+    --accent-soft: #1d2b3d;
+    --series-1: #3987e5;
+    --good: #4cc27c;
+    --warn: #e0a243;
+    --bad: #ef6b6a;
+    --down: #6fb0ea;
+    --grid: #2b2b29;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211;
+  --surface: #1a1a19;
+  --surface-2: #232321;
+  --border: #34332f;
+  --text: #f0efec;
+  --text-2: #c3c2b7;
+  --text-3: #8f8e86;
+  --accent: #3987e5;
+  --accent-soft: #1d2b3d;
+  --series-1: #3987e5;
+  --good: #4cc27c;
+  --warn: #e0a243;
+  --bad: #ef6b6a;
+  --down: #6fb0ea;
+  --grid: #2b2b29;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--surface);
+  position: sticky; top: 0; z-index: 5;
+}
+header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+header .meta { color: var(--text-2); font-size: 13px; }
+header .spacer { flex: 1; }
+.conn { font-size: 13px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
+
+main {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 38%);
+  gap: 20px; padding: 20px 24px; align-items: start;
+}
+@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); padding: 16px; } }
+
+h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-3); margin: 0 0 10px; font-weight: 600;
+}
+section + section { margin-top: 24px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px;
+}
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 550; }
+.status.good { color: var(--good); } .status.good .dot { background: var(--good); }
+.status.warn { color: var(--warn); } .status.warn .dot { background: var(--warn); }
+.status.bad { color: var(--bad); } .status.bad .dot { background: var(--bad); }
+.status.idle { color: var(--text-3); } .status.idle .dot { background: var(--text-3); }
+
+.card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.card-head .name { font-weight: 650; font-size: 15px; }
+.badge {
+  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
+  background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border);
+}
+.badge.c { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.card-head .status { margin-left: auto; }
+.eui { font-family: var(--mono); font-size: 12px; color: var(--text-3); margin-top: 2px; }
+
+.kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 12px; margin-top: 12px; }
+.kv div { min-width: 0; }
+.kv .k { font-size: 11px; color: var(--text-3); }
+.kv .v { font-variant-numeric: tabular-nums; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kv .v.mono { font-family: var(--mono); font-size: 12.5px; }
+
+.radio { display: flex; gap: 14px; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.radio .now .big { font-size: 20px; font-weight: 650; }
+.radio .now .sub { font-size: 12px; color: var(--text-2); }
+.spark { flex: 1; min-width: 0; position: relative; }
+.spark svg { width: 100%; height: 44px; display: block; overflow: visible; }
+.spark .lbl { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; gap: 8px; white-space: nowrap; }
+.spark .lbl span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.radio .now { flex: none; }
+.spark .tip {
+  position: absolute; top: -26px; transform: translateX(-50%); pointer-events: none;
+  background: var(--text); color: var(--surface); font-size: 11.5px; padding: 2px 7px;
+  border-radius: 5px; white-space: nowrap; display: none; font-variant-numeric: tabular-nums;
+}
+
+.values { margin-top: 10px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-2); }
+.values b { color: var(--text); font-weight: 600; }
+.lastdown { font-size: 12px; color: var(--text-3); margin-top: 6px; min-height: 1em; }
+
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+button, input, select {
+  font: inherit; font-size: 13px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  padding: 5px 10px;
+}
+button { cursor: pointer; font-weight: 550; }
+button:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+button.primary:hover { filter: brightness(1.08); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+details.dl { margin-top: 10px; }
+details.dl summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.dlform { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.dlform input[name=hex] { flex: 1; min-width: 120px; font-family: var(--mono); }
+.dlform input[name=fport] { width: 64px; }
+.dlform label { font-size: 13px; color: var(--text-2); display: flex; gap: 4px; align-items: center; }
+.dlmsg { font-size: 12px; margin-top: 4px; min-height: 1em; }
+.dlmsg.err { color: var(--bad); } .dlmsg.ok { color: var(--good); }
+.interval { display: flex; gap: 4px; align-items: center; }
+.interval input { width: 64px; }
+
+.gw .kv { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Journal */
+.log-card { padding: 0; display: flex; flex-direction: column; position: sticky; top: 76px; max-height: calc(100vh - 96px); }
+@media (max-width: 1000px) { .log-card { position: static; max-height: 70vh; } }
+.log-tools { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+.log-tools input[type=search] { flex: 1; min-width: 100px; }
+.log-tools label { font-size: 12.5px; color: var(--text-2); display: flex; gap: 4px; align-items: center; }
+#log { overflow-y: auto; font-family: var(--mono); font-size: 12px; padding: 6px 0; flex: 1; min-height: 200px; }
+.ev { display: grid; grid-template-columns: 62px 118px 1fr; gap: 8px; padding: 2px 12px; border-left: 3px solid transparent; }
+.ev:hover { background: var(--surface-2); }
+.ev .t { color: var(--text-3); }
+.ev .s { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev .s.gw::before { content: "◆ "; color: var(--text-3); }
+.ev .s.dev::before { content: "● "; color: var(--text-3); }
+.ev .m { word-break: break-word; }
+.ev.ok { border-left-color: var(--good); } .ev.ok .m { color: var(--good); }
+.ev.warn { border-left-color: var(--warn); } .ev.warn .m { color: var(--warn); }
+.ev.error { border-left-color: var(--bad); } .ev.error .m { color: var(--bad); }
+.ev.down { border-left-color: var(--down); } .ev.down .m { color: var(--down); }
+@media (max-width: 560px) {
+  .ev { grid-template-columns: 56px 1fr; }
+  .ev .m { grid-column: 1 / -1; }
+  .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  header { padding: 12px 16px; position: static; gap: 8px 16px; }
+  header .spacer { display: none; }
+  .spark .lbl span:first-child { display: none; }
+  .spark .lbl { justify-content: flex-end; }
+}
+.empty { color: var(--text-3); font-size: 13px; padding: 8px 0; }
+
+/* En-tête de section avec bouton */
+.section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.section-head h2 { margin: 0; }
+.section-head button { margin-left: auto; }
+
+/* Bouton copier + identifiants */
+.copy { font-size: 11.5px; padding: 1px 7px; font-weight: 500; color: var(--text-2); }
+.copy.done { color: var(--good); }
+.eui { display: flex; align-items: center; gap: 6px; }
+details.box { margin-top: 10px; }
+details.box summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.creds { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; margin-top: 8px; }
+.creds .k { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.creds .v { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.help { font-size: 12.5px; color: var(--text-2); margin: 8px 0 0; padding-left: 18px; }
+.help li + li { margin-top: 2px; }
+.help code, .hint code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 0 4px; border-radius: 4px; }
+.hint { font-size: 12.5px; color: var(--text-2); margin-top: 6px; }
+
+/* Formulaires (passerelle, nouveau device) */
+.form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; margin-top: 10px; }
+.form .full { grid-column: 1 / -1; }
+.form label.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-3); min-width: 0; }
+.form label.field input, .form label.field select { width: 100%; }
+.form input.mono { font-family: var(--mono); }
+.keyrow { display: flex; gap: 4px; }
+.keyrow input { flex: 1; min-width: 0; }
+.form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.form .row label { font-size: 13px; color: var(--text-2); display: flex; gap: 4px; align-items: center; }
+.msg { font-size: 12.5px; min-height: 1em; }
+.msg.err { color: var(--bad); } .msg.ok { color: var(--good); }
+#newdev { margin-bottom: 12px; border-color: var(--accent); }
+#newdev[hidden] { display: none; }
+#newdev h3 { margin: 0; font-size: 15px; }
+pre.codec { font-family: var(--mono); font-size: 11.5px; background: var(--surface-2); padding: 8px 10px; border-radius: 7px; overflow-x: auto; max-height: 260px; margin: 8px 0 0; }
+button.danger { color: var(--bad); }
+button.danger.armed { background: var(--bad); color: #fff; border-color: transparent; }
+.form [hidden], .form label.field[hidden] { display: none; }
+@media (max-width: 560px) { .form { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Simulateur LoRaWAN</h1>
+  <span class="meta" id="server">—</span>
+  <span class="spacer"></span>
+  <span class="conn" id="conn"><span class="status idle"><span class="dot"></span><span>connexion…</span></span></span>
+  <button id="theme" title="Changer de thème" aria-label="Changer de thème">◐</button>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>Passerelles</h2>
+      <div class="grid" id="gateways"></div>
+    </section>
+    <section>
+      <div class="section-head">
+        <h2>Devices</h2>
+        <button class="primary" id="add-device">+ Ajouter un device</button>
+      </div>
+
+      <form class="card" id="newdev" hidden autocomplete="off">
+        <div class="card-head"><h3>Nouveau device</h3></div>
+        <div class="hint">Le device est créé <b>éteint</b> dans le simulateur. Enregistrez-le vous-même dans
+          ChirpStack avec ces identifiants, puis allumez-le depuis sa carte.</div>
+        <div class="form">
+          <label class="field">Nom
+            <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,49}" placeholder="capteur-salle-b12"></label>
+          <label class="field">Activation
+            <select name="activation"><option value="otaa">OTAA (join)</option><option value="abp">ABP (clés fixes)</option></select></label>
+          <label class="field full">DevEUI (8 octets)
+            <span class="keyrow"><input name="dev_eui" class="mono" data-size="8" data-prefix="70b3d57ed0"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field otaa">JoinEUI / AppEUI (8 octets)
+            <span class="keyrow"><input name="join_eui" class="mono" value="0000000000000000"></span></label>
+          <label class="field otaa">AppKey (16 octets)
+            <span class="keyrow"><input name="app_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field abp" hidden>DevAddr (4 octets)
+            <span class="keyrow"><input name="dev_addr" class="mono" data-size="4" data-prefix="01"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field abp" hidden>NwkSKey (16 octets)
+            <span class="keyrow"><input name="nwk_s_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field abp full" hidden>AppSKey (16 octets)
+            <span class="keyrow"><input name="app_s_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field">Classe
+            <select name="class"><option value="A">A (écoute après chaque uplink)</option><option value="C">C (écoute permanente)</option></select></label>
+          <label class="field">Intervalle d'émission (s)
+            <input name="interval" type="number" min="5" value="30"></label>
+          <label class="field">Payload
+            <select name="payload"><option value="sensor">Capteur temp./humidité (FPort 2)</option><option value="text">Texte (FPort 10)</option></select></label>
+          <label class="field text" hidden>Texte ({n} = compteur)
+            <input name="payload_text" value="hello {n}"></label>
+          <div class="row full">
+            <label><input type="checkbox" name="confirmed"> uplinks confirmés</label>
+            <label><input type="checkbox" name="start"> allumer tout de suite</label>
+          </div>
+          <div class="row full">
+            <button class="primary" type="submit">Créer le device</button>
+            <button type="button" id="newdev-cancel">Annuler</button>
+            <span class="msg" id="newdev-msg"></span>
+          </div>
+        </div>
+        <details class="box">
+          <summary>Décodeur JavaScript du payload capteur (à coller dans le device profile ChirpStack)</summary>
+          <div class="hint">Device profile › onglet <i>Codec</i> › <i>JavaScript functions</i>.
+            <button type="button" class="copy" id="codec-copy">copier</button></div>
+          <pre class="codec" id="codec"></pre>
+        </details>
+      </form>
+
+      <div class="grid" id="devices"></div>
+    </section>
+  </div>
+
+  <section class="card log-card" aria-label="Journal">
+    <div class="log-tools">
+      <select id="f-source" aria-label="Filtrer par source"><option value="">Toutes les sources</option></select>
+      <input type="search" id="f-text" placeholder="Filtrer…" aria-label="Filtrer le texte">
+      <label><input type="checkbox" id="f-follow" checked> suivre</label>
+    </div>
+    <div id="log" role="log" aria-live="off"></div>
+  </section>
+</main>
+
+<template id="tpl-device">
+  <div class="card device">
+    <div class="card-head">
+      <span class="name" data-f="name"></span>
+      <span class="badge" data-f="class"></span>
+      <span class="badge" data-f="activation"></span>
+      <span class="status idle" data-f="status"><span class="dot"></span><span></span></span>
+    </div>
+    <div class="eui" data-f="eui"></div>
+    <div class="kv">
+      <div><div class="k">DevAddr</div><div class="v mono" data-f="dev_addr"></div></div>
+      <div><div class="k">FCnt ↑ / ↓</div><div class="v" data-f="fcnt"></div></div>
+      <div><div class="k">Data rate</div><div class="v" data-f="dr"></div></div>
+      <div><div class="k">TXPower</div><div class="v" data-f="txp"></div></div>
+      <div><div class="k">Uplinks</div><div class="v" data-f="uplinks"></div></div>
+      <div><div class="k">Downlinks</div><div class="v" data-f="downlinks"></div></div>
+      <div><div class="k">Intervalle</div><div class="v" data-f="interval"></div></div>
+      <div><div class="k">Dernier uplink</div><div class="v" data-f="last_up"></div></div>
+    </div>
+    <div class="radio">
+      <div class="now">
+        <div class="big" data-f="rssi"></div>
+        <div class="sub" data-f="snr"></div>
+      </div>
+      <div class="spark">
+        <div class="tip"></div>
+        <svg role="img" aria-label="Historique du RSSI"></svg>
+        <div class="lbl"><span>RSSI récent</span><span data-f="range"></span></div>
+      </div>
+    </div>
+    <div class="values" data-f="values"></div>
+    <div class="lastdown" data-f="lastdown"></div>
+    <div class="actions">
+      <button class="primary" data-a="uplink">Uplink maintenant</button>
+      <button data-a="rejoin">Rejoin</button>
+      <button data-a="pause">Éteindre</button>
+      <span class="interval">
+        <input type="number" min="5" step="1" aria-label="Intervalle (s)" placeholder="sec.">
+        <button data-a="interval">Appliquer</button>
+      </span>
+      <button class="danger" data-del>Supprimer</button>
+    </div>
+    <details class="box creds-box">
+      <summary>Identifiants à saisir dans ChirpStack</summary>
+      <div class="creds"></div>
+      <ol class="help"></ol>
+    </details>
+    <details class="dl">
+      <summary>Envoyer un downlink via ChirpStack</summary>
+      <form class="dlform">
+        <input name="hex" placeholder="hex, ex. 0014" aria-label="Données hexadécimales">
+        <input name="fport" type="number" min="1" max="223" value="10" aria-label="FPort">
+        <label><input name="confirmed" type="checkbox"> confirmé</label>
+        <button class="primary" type="submit">Envoyer</button>
+      </form>
+      <div class="dlmsg"></div>
+    </details>
+  </div>
+</template>
+
+<template id="tpl-gateway">
+  <div class="card gw">
+    <div class="card-head">
+      <span class="name" data-f="name"></span>
+      <span class="status idle" data-f="status"><span class="dot"></span><span></span></span>
+    </div>
+    <div class="eui" data-f="eui"></div>
+    <div class="kv">
+      <div><div class="k">Uplinks relayés</div><div class="v" data-f="up"></div></div>
+      <div><div class="k">Downlinks émis</div><div class="v" data-f="down"></div></div>
+      <div><div class="k">Refusés (timing)</div><div class="v" data-f="rej"></div></div>
+      <div><div class="k">Serveur</div><div class="v mono" data-f="server"></div></div>
+      <div><div class="k">Dernier ACK</div><div class="v" data-f="ack"></div></div>
+      <div><div class="k">Position</div><div class="v" data-f="pos"></div></div>
+    </div>
+    <details class="box">
+      <summary>Configuration du packet forwarder</summary>
+      <form class="form gwform" autocomplete="off">
+        <label class="field">Adresse du serveur LoRaWAN
+          <input name="host" required placeholder="192.168.1.50" class="mono"></label>
+        <label class="field">Port UDP (Gateway Bridge)
+          <input name="port" type="number" min="1" max="65535" required></label>
+        <div class="row full">
+          <button class="primary" type="submit">Appliquer</button>
+          <span class="msg"></span>
+        </div>
+      </form>
+      <div class="hint">Équivalent de <code>serv_address</code> / <code>serv_port_up</code> dans le
+        <code>global_conf.json</code> d'une vraie passerelle. Dans ChirpStack : <i>Gateways › Add gateway</i>,
+        Gateway ID = l'EUI ci-dessus.</div>
+    </details>
+  </div>
+</template>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const cards = { devices: new Map(), gateways: new Map() };
+let apiEnabled = false;
+let serverNow = Date.now() / 1000, clientOffset = 0;
+
+// --- thème -----------------------------------------------------------------
+try {
+  const t = localStorage.getItem("lorasim-theme");
+  if (t) document.documentElement.dataset.theme = t;
+} catch (e) {}
+$("#theme").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("lorasim-theme", root.dataset.theme); } catch (e) {}
+};
+
+// --- utilitaires -----------------------------------------------------------
+function ago(ts) {
+  if (!ts) return "—";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - clientOffset - ts));
+  if (s < 60) return `il y a ${s} s`;
+  if (s < 3600) return `il y a ${Math.floor(s / 60)} min`;
+  return `il y a ${Math.floor(s / 3600)} h`;
+}
+function setStatus(el, cls, text) {
+  el.className = "status " + cls;
+  el.lastElementChild.textContent = text;
+}
+function f(card, name) { return card.querySelector(`[data-f="${name}"]`); }
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {  // http:// hors localhost : pas d'API presse-papiers
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  if (btn) {
+    btn.textContent = "copié ✓"; btn.classList.add("done");
+    setTimeout(() => { btn.textContent = "copier"; btn.classList.remove("done"); }, 1200);
+  }
+}
+function copyButton(text) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "copy"; b.textContent = "copier";
+  b.onclick = () => copyText(text, b);
+  return b;
+}
+function setEui(card, label, value) {
+  const el = f(card, "eui");
+  if (el.dataset.v === value) return;
+  el.dataset.v = value;
+  el.replaceChildren(document.createTextNode(`${label} ${value}`), copyButton(value));
+}
+async function api(method, url, body) {
+  try {
+    const r = await fetch(url, {
+      method, headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return await r.json().catch(() => ({ ok: r.ok }));
+  } catch (e) { return { ok: false, error: "simulateur injoignable" }; }
+}
+function rssiQuality(r) {
+  if (r == null) return "";
+  if (r > -90) return "excellent";
+  if (r > -105) return "bon";
+  if (r > -115) return "faible";
+  return "limite";
+}
+
+// --- sparkline RSSI (une seule série, ligne 2 px, survol) -------------------
+function drawSpark(card, hist) {
+  const svg = $("svg", card), tip = $(".tip", card);
+  const W = Math.max(svg.clientWidth, 60), H = 44, pad = 5;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const vals = hist.filter(v => v != null);
+  svg.innerHTML = "";
+  if (!vals.length) { f(card, "range").textContent = ""; return; }
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 10) { const m = (hi + lo) / 2; lo = m - 5; hi = m + 5; }
+  const n = Math.max(hist.length, 2);
+  const x = i => (i / (n - 1)) * W;
+  const y = v => pad + (1 - (v - lo) / (hi - lo)) * (H - 2 * pad);
+  const ns = "http://www.w3.org/2000/svg";
+  // ligne de base discrète (milieu de l'échelle)
+  const g = document.createElementNS(ns, "line");
+  g.setAttribute("x1", 0); g.setAttribute("x2", W);
+  g.setAttribute("y1", H / 2); g.setAttribute("y2", H / 2);
+  g.setAttribute("stroke", "var(--grid)"); g.setAttribute("stroke-width", 1);
+  svg.appendChild(g);
+  // segments continus (une trame perdue coupe la ligne)
+  let d = "", pen = false;
+  hist.forEach((v, i) => {
+    if (v == null) { pen = false; return; }
+    d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+    pen = true;
+  });
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("d", d); p.setAttribute("fill", "none");
+  p.setAttribute("stroke", "var(--series-1)"); p.setAttribute("stroke-width", 2);
+  p.setAttribute("stroke-linejoin", "round"); p.setAttribute("stroke-linecap", "round");
+  svg.appendChild(p);
+  // marqueur de survol
+  const dot = document.createElementNS(ns, "circle");
+  dot.setAttribute("r", 4); dot.setAttribute("fill", "var(--series-1)");
+  dot.setAttribute("stroke", "var(--surface)"); dot.setAttribute("stroke-width", 2);
+  dot.style.display = "none";
+  svg.appendChild(dot);
+  f(card, "range").textContent = `${Math.round(Math.min(...vals))} … ${Math.round(Math.max(...vals))} dBm`;
+
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.round(((e.clientX - r.left) / r.width) * (n - 1));
+    if (i < 0 || i >= hist.length) return;
+    const v = hist[i];
+    const back = hist.length - 1 - i;
+    tip.textContent = v == null ? "trame perdue" : `${v} dBm` + (back ? ` · uplink n-${back}` : " · dernier");
+    tip.style.display = "block";
+    tip.style.left = x(i) + "px";
+    if (v != null) {
+      dot.setAttribute("cx", x(i)); dot.setAttribute("cy", y(v));
+      dot.style.display = "";
+    } else dot.style.display = "none";
+  };
+  svg.onmouseleave = () => { tip.style.display = "none"; dot.style.display = "none"; };
+}
+
+// --- actions -----------------------------------------------------------------
+function post(name, action, body) {
+  return api("POST", `/api/devices/${encodeURIComponent(name)}/${action}`, body || {});
+}
+
+const HELP = {
+  otaa: [
+    "Device profile : région <code>EU868</code>, MAC <code>LoRaWAN 1.0.3</code>, révision <code>A</code>, « Device supports OTAA » coché{C}.",
+    "<i>Applications › votre application › Add device</i> : DevEUI, JoinEUI et ce device profile.",
+    "Onglet <i>OTAA keys</i> : <i>Application key</i> = AppKey.",
+    "Allumez le device : il envoie un Join Request (les clés de session apparaissent ici après le join).",
+  ],
+  abp: [
+    "Device profile : région <code>EU868</code>, MAC <code>LoRaWAN 1.0.3</code>, révision <code>A</code>, « Device supports OTAA » décoché, RX1 delay <code>1</code>, RX2 DR <code>0</code>, RX2 frequency <code>869525000</code>{C}.",
+    "<i>Applications › votre application › Add device</i> : DevEUI et ce device profile.",
+    "Onglet <i>Activation</i> : DevAddr, <i>Network session key</i> = NwkSKey, <i>Application session key</i> = AppSKey, compteurs = FCnt affichés.",
+    "Allumez le device : il émet directement, sans join.",
+  ],
+};
+const openCreds = new Set();
+
+function makeDevice(d) {
+  const card = $("#tpl-device").content.firstElementChild.cloneNode(true);
+  card.dataset.name = d.name;
+  card.querySelectorAll("button[data-a]").forEach(b => {
+    b.onclick = async () => {
+      let a = b.dataset.a, body = {};
+      if (a === "pause" && b.dataset.paused === "1") a = "resume";
+      if (a === "interval") {
+        const v = parseFloat($(".interval input", card).value);
+        if (!(v >= 5)) return;
+        body = { seconds: v };
+        $(".interval input", card).value = "";
+      }
+      b.disabled = true;
+      await post(d.name, a, body);
+      setTimeout(() => (b.disabled = false), 400);
+      refresh();
+    };
+  });
+  const del = card.querySelector("[data-del]");
+  del.onclick = async () => {
+    if (!del.classList.contains("armed")) {
+      del.classList.add("armed"); del.textContent = "Confirmer la suppression";
+      setTimeout(() => { del.classList.remove("armed"); del.textContent = "Supprimer"; }, 3000);
+      return;
+    }
+    del.disabled = true;
+    await api("DELETE", `/api/devices/${encodeURIComponent(d.name)}`);
+    refresh();
+  };
+  const help = $(".help", card);
+  help.innerHTML = HELP[d.activation].map(t =>
+    `<li>${t.replace("{C}", d.class === "C" ? ", « Supports Class-C » coché" : "")}</li>`).join("");
+  if (openCreds.has(d.name) || (d.status === "pause" && d.uplinks === 0)) $(".creds-box", card).open = true;
+  const form = $(".dlform", card), msg = $(".dlmsg", card);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    msg.className = "dlmsg"; msg.textContent = "envoi…";
+    const r = await post(d.name, "downlink", {
+      hex: fd.get("hex"), fport: +fd.get("fport"), confirmed: !!fd.get("confirmed"),
+    });
+    if (r.ok) {
+      msg.className = "dlmsg ok";
+      msg.textContent = d.class === "C" ? "En file : émission immédiate (classe C)."
+        : "En file : partira après le prochain uplink (classe A).";
+    } else {
+      msg.className = "dlmsg err";
+      msg.textContent = r.error || "échec";
+    }
+  };
+  $("#devices").appendChild(card);
+  return card;
+}
+
+function updateDevice(card, d) {
+  f(card, "name").textContent = d.name;
+  const cls = f(card, "class");
+  cls.textContent = "Classe " + d.class;
+  cls.className = "badge" + (d.class === "C" ? " c" : "");
+  f(card, "activation").textContent = d.activation.toUpperCase() + (d.confirmed ? " · confirmé" : "");
+  const st = d.status;
+  setStatus(f(card, "status"),
+    st.startsWith("actif") ? "good" : st === "pause" ? "idle" : st.startsWith("échec") ? "bad" : "warn",
+    st === "pause" ? "éteint" : st);
+  setEui(card, "DevEUI", d.dev_eui);
+  const credKey = JSON.stringify(d.credentials);
+  if (card.dataset.creds !== credKey) {
+    card.dataset.creds = credKey;
+    const box = $(".creds", card);
+    box.replaceChildren();
+    for (const [k, v] of d.credentials) {
+      const kd = document.createElement("span"), vd = document.createElement("span");
+      kd.className = "k"; kd.textContent = k;
+      vd.className = "v"; vd.textContent = v;
+      box.append(kd, vd, copyButton(v));
+    }
+  }
+  f(card, "dev_addr").textContent = d.dev_addr || "—";
+  f(card, "fcnt").textContent = `${d.fcnt_up} / ${d.fcnt_down}`;
+  f(card, "dr").textContent = `DR${d.dr} · ${d.sf}`;
+  f(card, "txp").textContent = d.tx_power ? `−${2 * d.tx_power} dB` : "max";
+  f(card, "uplinks").textContent = d.uplinks;
+  f(card, "downlinks").textContent = d.downlinks;
+  f(card, "interval").textContent = `${d.interval} s`;
+  f(card, "last_up").textContent = ago(d.last_up);
+  f(card, "rssi").textContent = d.rssi == null ? "—" : `${d.rssi} dBm`;
+  f(card, "snr").textContent = d.rssi == null ? "pas de réception"
+    : `SNR ${d.snr} dB · ${rssiQuality(d.rssi)} · ${d.gateways} passerelle${d.gateways > 1 ? "s" : ""}`;
+  const v = d.values || {}, parts = [];
+  if (v.temperature != null) parts.push(`<span>Température <b>${v.temperature.toFixed(1)} °C</b></span>`);
+  if (v.humidity != null) parts.push(`<span>Humidité <b>${v.humidity} %</b></span>`);
+  if (v.battery_mv != null) parts.push(`<span>Batterie <b>${(v.battery_mv / 1000).toFixed(2)} V</b></span>`);
+  if (v.text != null) parts.push(`<span>Texte <b></b></span>`);
+  if (v.hex != null) parts.push(`<span>Payload <b></b></span>`);
+  const vals = f(card, "values");
+  vals.innerHTML = parts.join("");
+  if (v.text != null) vals.querySelector("b").textContent = `« ${v.text} »`;
+  if (v.hex != null) vals.querySelector("b").textContent = v.hex;
+  f(card, "lastdown").textContent = d.last_down
+    ? `Dernier downlink ${ago(d.last_down)}${d.last_down_info ? " · " + d.last_down_info : ""}` : "";
+  const pb = card.querySelector('button[data-a="pause"]');
+  pb.textContent = d.status === "pause" ? "Allumer" : "Éteindre";
+  pb.dataset.paused = d.status === "pause" ? "1" : "0";
+  card.querySelector('button[data-a="rejoin"]').disabled = d.activation !== "otaa";
+  card.querySelector('button[data-a="uplink"]').disabled = d.status === "pause";
+  const sub = card.querySelector('.dlform button[type="submit"]');
+  sub.disabled = !apiEnabled;
+  sub.title = apiEnabled ? "" : "Renseignez server.api_token dans la configuration";
+  const key = d.rssi_history.join(",");
+  if (card.dataset.spark !== key) { card.dataset.spark = key; drawSpark(card, d.rssi_history); }
+}
+
+function makeGateway(g) {
+  const card = $("#tpl-gateway").content.firstElementChild.cloneNode(true);
+  const form = $(".gwform", card), msg = $(".msg", form), el = form.elements;
+  el.host.value = g.server_host;
+  el.port.value = g.server_port;
+  form.onsubmit = async e => {
+    e.preventDefault();
+    msg.className = "msg"; msg.textContent = "reconnexion…";
+    const r = await api("POST", `/api/gateways/${g.id}/server`,
+      { host: el.host.value.trim(), port: +el.port.value });
+    if (!r.ok) { msg.className = "msg err"; msg.textContent = r.error || "échec"; return; }
+    msg.textContent = "Appliqué : en attente d'une réponse du serveur…";
+    card._waiting = Date.now();
+    refresh();
+  };
+  $("#gateways").appendChild(card);
+  return card;
+}
+
+function updateGateway(card, g) {
+  f(card, "name").textContent = g.name;
+  setStatus(f(card, "status"), g.connected ? "good" : "bad", g.connected ? "connectée" : "hors ligne");
+  setEui(card, "EUI", g.id);
+  if (card._waiting) {
+    const msg = $(".gwform .msg", card);
+    if (g.connected) {
+      msg.className = "msg ok"; msg.textContent = "Connectée au serveur ✓"; card._waiting = 0;
+    } else if (Date.now() - card._waiting > 12000) {
+      msg.className = "msg err";
+      msg.textContent = "Aucune réponse : vérifiez l'adresse, le port UDP et que le Gateway Bridge tourne.";
+      card._waiting = 0;
+    }
+  }
+  f(card, "up").textContent = g.uplinks;
+  f(card, "down").textContent = g.downlinks;
+  f(card, "rej").textContent = g.rejected;
+  f(card, "server").textContent = g.server;
+  f(card, "ack").textContent = ago(g.last_ack);
+  f(card, "pos").textContent = g.lat != null ? `${g.lat.toFixed(4)}, ${g.lon.toFixed(4)}` : "—";
+}
+
+// --- état (rafraîchi chaque seconde) ------------------------------------------
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/state")).json(); }
+  catch (e) { setStatus($("#conn .status"), "bad", "simulateur arrêté"); return; }
+  clientOffset = Date.now() / 1000 - s.now;
+  apiEnabled = s.server.api;
+  $("#server").textContent = s.server.api
+    ? `API ChirpStack ${s.server.host}:${s.server.api_port} (downlinks)`
+    : "API ChirpStack non configurée (downlinks désactivés)";
+  setStatus($("#conn .status"), "good", "simulateur en marche");
+  for (const g of s.gateways) {
+    let c = cards.gateways.get(g.id);
+    if (!c) { c = makeGateway(g); cards.gateways.set(g.id, c); }
+    updateGateway(c, g);
+  }
+  for (const d of s.devices) {
+    let c = cards.devices.get(d.name);
+    if (!c) { c = makeDevice(d); cards.devices.set(d.name, c); }
+    updateDevice(c, d);
+  }
+  const names = new Set(s.devices.map(d => d.name));
+  for (const [n, c] of cards.devices) if (!names.has(n)) { c.remove(); cards.devices.delete(n); }
+  let empty = $("#devices .empty");
+  if (!s.devices.length && !empty) {
+    empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Aucun device : cliquez sur « Ajouter un device ».";
+    $("#devices").appendChild(empty);
+  } else if (s.devices.length && empty) empty.remove();
+  const sel = $("#f-source");
+  for (const name of [...s.gateways.map(g => g.name), ...s.devices.map(d => d.name)]) {
+    if (![...sel.options].some(o => o.value === name)) sel.add(new Option(name, name));
+  }
+}
+// --- création d'un device -------------------------------------------------------
+const nd = $("#newdev"), ndMsg = $("#newdev-msg");
+const rhex = n => [...crypto.getRandomValues(new Uint8Array(n))]
+  .map(b => b.toString(16).padStart(2, "0")).join("");
+function regen(input) {
+  const p = input.dataset.prefix || "";
+  input.value = p + rhex(+input.dataset.size - p.length / 2);
+}
+function syncForm() {
+  const abp = nd.elements.activation.value === "abp";
+  nd.querySelectorAll(".otaa").forEach(el => (el.hidden = abp));
+  nd.querySelectorAll(".abp").forEach(el => (el.hidden = !abp));
+  $(".text", nd).hidden = nd.elements.payload.value !== "text";
+}
+nd.querySelectorAll(".regen").forEach(b => (b.onclick = () => regen(b.previousElementSibling)));
+nd.elements.activation.onchange = syncForm;
+nd.elements.payload.onchange = syncForm;
+$("#add-device").onclick = () => {
+  nd.reset();
+  nd.querySelectorAll("input[data-size]").forEach(regen);
+  let i = cards.devices.size + 1;
+  while (cards.devices.has(`capteur-${String(i).padStart(2, "0")}`)) i++;
+  nd.elements.name.value = `capteur-${String(i).padStart(2, "0")}`;
+  ndMsg.textContent = "";
+  syncForm();
+  nd.hidden = false;
+  nd.elements.name.focus();
+  if (!$("#codec").textContent)
+    fetch("/api/codec").then(r => r.text()).then(t => ($("#codec").textContent = t)).catch(() => {});
+};
+$("#newdev-cancel").onclick = () => (nd.hidden = true);
+$("#codec-copy").onclick = e => copyText($("#codec").textContent, e.target);
+nd.onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(nd);
+  const body = Object.fromEntries(fd);
+  body.confirmed = fd.has("confirmed");
+  body.start = fd.has("start");
+  body.interval = +body.interval;
+  ndMsg.className = "msg"; ndMsg.textContent = "création…";
+  const r = await api("POST", "/api/devices", body);
+  if (!r.ok) { ndMsg.className = "msg err"; ndMsg.textContent = r.error || "échec"; return; }
+  nd.hidden = true;
+  openCreds.add(r.name);
+  await refresh();
+  const c = cards.devices.get(r.name);
+  if (c) { $(".creds-box", c).open = true; c.scrollIntoView({ behavior: "smooth", block: "center" }); }
+};
+
+refresh();
+setInterval(refresh, 1000);
+addEventListener("resize", () => { for (const c of cards.devices.values()) c.dataset.spark = ""; });
+
+// --- journal temps réel (Server-Sent Events) ----------------------------------
+const logEl = $("#log");
+const MAX_LINES = 600;
+let lastId = 0;
+function matches(ev) {
+  const src = $("#f-source").value, txt = $("#f-text").value.toLowerCase();
+  if (src && ev.source !== src) return false;
+  if (txt && !(ev.msg + " " + ev.source).toLowerCase().includes(txt)) return false;
+  return true;
+}
+function addEvent(ev) {
+  if (ev.id <= lastId) return;   // déjà affiché (reconnexion)
+  lastId = ev.id;
+  const row = document.createElement("div");
+  row.className = "ev " + ev.level;
+  row._ev = ev;
+  const t = new Date(ev.ts * 1000).toLocaleTimeString("fr-FR");
+  row.innerHTML = `<span class="t"></span><span class="s ${ev.kind}"></span><span class="m"></span>`;
+  row.children[0].textContent = t;
+  row.children[1].textContent = ev.source;
+  row.children[1].title = ev.source;
+  row.children[2].textContent = ev.msg;
+  row.hidden = !matches(ev);
+  logEl.appendChild(row);
+  while (logEl.children.length > MAX_LINES) logEl.firstElementChild.remove();
+  if ($("#f-follow").checked) logEl.scrollTop = logEl.scrollHeight;
+}
+function applyFilter() {
+  for (const row of logEl.children) row.hidden = !matches(row._ev);
+  if ($("#f-follow").checked) logEl.scrollTop = logEl.scrollHeight;
+}
+$("#f-source").onchange = applyFilter;
+$("#f-text").oninput = applyFilter;
+logEl.addEventListener("wheel", e => { if (e.deltaY < 0) $("#f-follow").checked = false; });
+
+const es = new EventSource("/api/events");
+es.onmessage = e => addEvent(JSON.parse(e.data));
+</script>
+</body>
+</html>

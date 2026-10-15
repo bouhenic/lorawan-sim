@@ -1,0 +1,23 @@
+services:
+  lorasim:
+    build: .
+    image: lorasim:latest
+    restart: unless-stopped
+    ports:
+      # Tableau de bord. « 127.0.0.1:8000:8000 » pour le réserver à cette machine
+      # (les clés des devices y sont visibles).
+      - "8000:8000"
+    volumes:
+      # config.yaml + config.state.json : conservés entre deux redémarrages
+      - ./data:/data
+    environment:
+      # Adresse du serveur LoRaWAN écrite dans la config au premier démarrage.
+      # host.docker.internal = la machine hôte (ChirpStack de chirpstack-docker).
+      - LORASIM_SERVER=host.docker.internal
+      # Nombre de devices OTAA générés au premier démarrage (0 = tout créer depuis l'interface)
+      - LORASIM_DEVICES=0
+      # Heure des logs du terminal (le tableau de bord utilise l'heure du navigateur)
+      - TZ=Europe/Paris
+    extra_hosts:
+      # Rend host.docker.internal disponible aussi sous Linux
+      - "host.docker.internal:host-gateway"
