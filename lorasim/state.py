@@ -23,6 +23,7 @@ class State:
         d.setdefault("dev_nonce", random.randint(0, 30000))
         d.setdefault("fcnt_up", 0)
         d.setdefault("fcnt_down", -1)
+        d.setdefault("mc_fcnt", {})  # dernier FCnt reçu par groupe multicast
         return d
 
     def next_dev_nonce(self, dev_eui: str) -> int:

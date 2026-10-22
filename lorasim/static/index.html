@@ -257,6 +257,23 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
 .dispform .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .dispform .count { font-size: 12px; color: var(--text-3); margin-left: auto; font-variant-numeric: tabular-nums; }
 .dispform .count.over { color: var(--bad); font-weight: 600; }
+
+/* Groupes multicast */
+.group .kv { grid-template-columns: 1.5fr 1.1fr .8fr 1fr; }
+.badge.mc { background: transparent; color: var(--accent); border-color: var(--accent); }
+.badge[hidden] { display: none; }
+.members { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 13px; }
+.members label { display: flex; gap: 5px; align-items: center; color: var(--text); }
+.members .note { color: var(--warn); font-size: 12px; }
+.members .off { color: var(--text-3); font-size: 12px; }
+.mcform { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.mcform input[name=text] { flex: 1; min-width: 160px; }
+.mcform input[name=hex] { flex: 1; min-width: 120px; font-family: var(--mono); }
+.mcform input[name=fport] { width: 64px; }
+.mcform .k { font-size: 12px; color: var(--text-3); min-width: 64px; }
+#newgroup { margin-bottom: 12px; border-color: var(--accent); }
+#newgroup[hidden] { display: none; }
+#newgroup h3 { margin: 0; font-size: 15px; }
 @media (max-width: 560px) { .form { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
@@ -274,6 +291,44 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
     <section>
       <h2>Passerelles</h2>
       <div class="grid" id="gateways"></div>
+    </section>
+    <section>
+      <div class="section-head">
+        <h2>Groupes multicast</h2>
+        <button id="add-group">+ Nouveau groupe</button>
+      </div>
+
+      <form class="card" id="newgroup" hidden autocomplete="off">
+        <div class="card-head"><h3>Nouveau groupe multicast (classe C)</h3></div>
+        <div class="hint">Un downlink envoyé au groupe est émis <b>une seule fois</b> et reçu par tous les
+          membres de classe C qui écoutent sur sa fréquence et son data rate. Créez ensuite le même groupe
+          dans ChirpStack avec ces paramètres.</div>
+        <div class="form">
+          <label class="field">Nom
+            <input name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,49}" placeholder="eclairage-bat-b"></label>
+          <label class="field">McAddr (4 octets)
+            <span class="keyrow"><input name="mc_addr" class="mono" data-size="4" data-prefix="e0"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field">McNwkSKey (16 octets)
+            <span class="keyrow"><input name="mc_nwk_s_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field">McAppSKey (16 octets)
+            <span class="keyrow"><input name="mc_app_s_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field">Data rate
+            <select name="dr">
+              <option value="0">DR0 · SF12 (RX2 par défaut)</option><option value="1">DR1 · SF11</option>
+              <option value="2">DR2 · SF10</option><option value="3">DR3 · SF9</option>
+              <option value="4">DR4 · SF8</option><option value="5">DR5 · SF7</option>
+            </select></label>
+          <label class="field">Fréquence (Hz)
+            <input name="frequency" type="number" min="863000000" max="870000000" value="869525000"></label>
+          <div class="row full">
+            <button class="primary" type="submit">Créer le groupe</button>
+            <button type="button" id="newgroup-cancel">Annuler</button>
+            <span class="msg" id="newgroup-msg"></span>
+          </div>
+        </div>
+      </form>
+
+      <div class="grid" id="groups"></div>
     </section>
     <section>
       <div class="section-head">
@@ -353,6 +408,7 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
       <span class="name" data-f="name"></span>
       <span class="badge" data-f="class"></span>
       <span class="badge" data-f="activation"></span>
+      <span class="badge mc" data-f="groups" hidden></span>
       <span class="status idle" data-f="status"><span class="dot"></span><span></span></span>
     </div>
     <div class="eui" data-f="eui"></div>
@@ -450,6 +506,61 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
   </div>
 </template>
 
+<template id="tpl-group">
+  <div class="card group">
+    <div class="card-head">
+      <span class="name" data-f="name"></span>
+      <span class="badge c">Classe C</span>
+      <span class="status idle" data-f="status"><span class="dot"></span><span></span></span>
+    </div>
+    <div class="eui" data-f="eui"></div>
+    <div class="kv">
+      <div><div class="k">Fréquence</div><div class="v" data-f="freq"></div></div>
+      <div><div class="k">Data rate</div><div class="v" data-f="dr"></div></div>
+      <div><div class="k">Membres</div><div class="v" data-f="count"></div></div>
+      <div><div class="k">Taille max</div><div class="v" data-f="max"></div></div>
+    </div>
+    <div class="members" data-f="members"></div>
+    <div class="ctrl">
+      <div class="mcform">
+        <span class="k">Relais</span>
+        <button class="primary" data-r="on">ON</button>
+        <button data-r="off">OFF</button>
+        <button data-r="toggle">Basculer</button>
+      </div>
+      <form class="mcform" data-t>
+        <span class="k">Afficheurs</span>
+        <input name="text" placeholder="Évacuation bâtiment B" aria-label="Texte pour les afficheurs du groupe">
+        <button class="primary" type="submit">Envoyer</button>
+      </form>
+      <form class="mcform" data-h>
+        <span class="k">Brut</span>
+        <input name="hex" placeholder="hex, ex. 01" aria-label="Données hexadécimales">
+        <input name="fport" type="number" min="1" max="223" value="3" aria-label="FPort">
+        <button type="submit">Envoyer</button>
+      </form>
+      <div class="hint">Un downlink multicast n'est jamais confirmé : chaque membre répond par un uplink
+        après un délai aléatoire (0 à 10 s) pour éviter les collisions. Dans ChirpStack, la file d'un groupe
+        n'accepte que des octets en hexadécimal (<i>Data (HEX)</i>) : pas de JSON, le codec n'est pas utilisé.</div>
+      <div class="dlmsg"></div>
+    </div>
+    <details class="box creds-box">
+      <summary>Paramètres à saisir dans ChirpStack</summary>
+      <div class="creds"></div>
+      <ol class="help">
+        <li><i>Applications › votre application › onglet Multicast groups › Add multicast-group</i> : nom, McAddr,
+          McNwkSKey, McAppSKey, <i>Group type</i> <code>Class-C</code>, DR et fréquence ci-dessus,
+          <i>Class-C scheduling type</i> <code>Delay</code>.</li>
+        <li>Onglet <i>Devices</i> de l'application : cochez les mêmes devices que ci-dessus, puis
+          <i>Selected devices › Add to multicast-group</i>.</li>
+        <li>Associer une passerelle au groupe est facultatif : sans passerelle, ChirpStack émet par celles
+          qui entendent les membres.</li>
+      </ol>
+    </details>
+    <div class="actions"><button class="danger" data-del>Supprimer le groupe</button></div>
+  </div>
+</template>
+
 <template id="tpl-gateway">
   <div class="card gw">
     <div class="card-head">
@@ -486,7 +597,7 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
-const cards = { devices: new Map(), gateways: new Map() };
+const cards = { devices: new Map(), gateways: new Map(), groups: new Map() };
 let apiEnabled = false;
 let serverNow = Date.now() / 1000, clientOffset = 0;
 
@@ -766,6 +877,9 @@ function updateDevice(card, d) {
   cls.textContent = "Classe " + d.class;
   cls.className = "badge" + (d.class === "C" ? " c" : "");
   f(card, "activation").textContent = d.activation.toUpperCase() + (d.confirmed ? " · confirmé" : "");
+  const gb = f(card, "groups");
+  gb.hidden = !d.groups.length;
+  gb.textContent = "multicast : " + d.groups.join(", ");
   const st = d.status;
   setStatus(f(card, "status"),
     st.startsWith("actif") ? "good" : st === "pause" ? "idle" : st.startsWith("échec") ? "bad" : "warn",
@@ -860,6 +974,107 @@ function updateGateway(card, g) {
   f(card, "pos").textContent = g.lat != null ? `${g.lat.toFixed(4)}, ${g.lon.toFixed(4)}` : "—";
 }
 
+// --- groupes multicast -----------------------------------------------------------
+const MAX_LEN = [51, 51, 51, 115, 222, 222];   // octets applicatifs max par DR (EU868)
+
+function gpost(name, path, body) {
+  return api("POST", `/api/groups/${encodeURIComponent(name)}/${path}`, body);
+}
+function makeGroup(g) {
+  const card = $("#tpl-group").content.firstElementChild.cloneNode(true);
+  const msg = $(".dlmsg", card);
+  const send = async body => {
+    msg.className = "dlmsg"; msg.textContent = "envoi…";
+    const r = await gpost(g.name, "command", body);
+    if (r.ok) {
+      msg.className = "dlmsg ok";
+      msg.textContent = `En file (FCnt multicast ${r.fcnt}) : émission immédiate vers les membres de classe C.`;
+    } else {
+      msg.className = "dlmsg err"; msg.textContent = r.error || "échec";
+    }
+  };
+  card.querySelectorAll("button[data-r]").forEach(b => (b.onclick = () => send({ relay: b.dataset.r })));
+  const tf = $("form[data-t]", card), hf = $("form[data-h]", card);
+  tf.onsubmit = e => { e.preventDefault(); send({ text: tf.elements.text.value }); };
+  hf.onsubmit = e => { e.preventDefault(); send({ hex: hf.elements.hex.value, fport: +hf.elements.fport.value }); };
+  $(".members", card).onchange = async e => {
+    const cb = e.target;
+    cb.disabled = true;
+    await gpost(g.name, "members", { device: cb.value, member: cb.checked });
+    card.dataset.members = "";
+    refresh();
+  };
+  const del = $("[data-del]", card);
+  del.onclick = async () => {
+    if (!del.classList.contains("armed")) {
+      del.classList.add("armed"); del.textContent = "Confirmer la suppression";
+      setTimeout(() => { del.classList.remove("armed"); del.textContent = "Supprimer le groupe"; }, 3000);
+      return;
+    }
+    del.disabled = true;
+    await api("DELETE", `/api/groups/${encodeURIComponent(g.name)}`);
+    refresh();
+  };
+  $("#groups").appendChild(card);
+  return card;
+}
+function updateGroup(card, g, devices) {
+  f(card, "name").textContent = g.name;
+  setEui(card, "McAddr", g.mc_addr);
+  const byName = new Map(devices.map(d => [d.name, d]));
+  const members = g.devices.filter(n => byName.has(n));
+  const listening = members.filter(n => {
+    const d = byName.get(n);
+    return d.class === "C" && d.status.startsWith("actif");
+  });
+  setStatus(f(card, "status"), listening.length ? "good" : "idle",
+    `${listening.length} / ${members.length} à l'écoute`);
+  f(card, "freq").textContent = `${(g.frequency / 1e6).toFixed(3)} MHz`;
+  f(card, "dr").textContent = `DR${g.dr} · SF${12 - g.dr}`;
+  f(card, "count").textContent = members.length;
+  f(card, "max").textContent = `${MAX_LEN[g.dr]} octets`;
+  // Cases à cocher des membres (reconstruites seulement si quelque chose a changé)
+  const key = JSON.stringify([g.devices, devices.map(d => [d.name, d.class, d.status === "pause"])]);
+  if (card.dataset.members !== key) {
+    card.dataset.members = key;
+    const box = f(card, "members");
+    box.replaceChildren();
+    if (!devices.length) box.textContent = "Aucun device à ajouter.";
+    for (const d of devices) {
+      const lab = document.createElement("label"), cb = document.createElement("input");
+      cb.type = "checkbox"; cb.value = d.name; cb.checked = g.devices.includes(d.name);
+      lab.append(cb, document.createTextNode(d.name));
+      if (d.class !== "C") {
+        const n = document.createElement("span");
+        n.className = "note"; n.textContent = "classe A : ne recevra pas";
+        lab.append(n);
+      } else if (d.status === "pause") {
+        const n = document.createElement("span");
+        n.className = "off"; n.textContent = "éteint";
+        lab.append(n);
+      }
+      box.append(lab);
+    }
+  }
+  const credKey = JSON.stringify([g.mc_addr, g.mc_nwk_s_key, g.mc_app_s_key, g.dr, g.frequency]);
+  if (card.dataset.creds !== credKey) {
+    card.dataset.creds = credKey;
+    const box = $(".creds", card);
+    box.replaceChildren();
+    for (const [k, v] of [["McAddr", g.mc_addr], ["McNwkSKey", g.mc_nwk_s_key], ["McAppSKey", g.mc_app_s_key],
+                          ["DR", String(g.dr)], ["Frequency (Hz)", String(g.frequency)]]) {
+      const kd = document.createElement("span"), vd = document.createElement("span");
+      kd.className = "k"; kd.textContent = k;
+      vd.className = "v"; vd.textContent = v;
+      box.append(kd, vd, copyButton(v));
+    }
+  }
+  card.querySelectorAll(".ctrl button").forEach(b => {
+    b.disabled = !apiEnabled;
+    b.title = apiEnabled ? "" : "Renseignez server.api_token dans la configuration";
+  });
+}
+
 // --- état (rafraîchi chaque seconde) ------------------------------------------
 async function refresh() {
   let s;
@@ -881,6 +1096,20 @@ async function refresh() {
     if (!c) { c = makeDevice(d); cards.devices.set(d.name, c); }
     updateDevice(c, d);
   }
+  const gnames = new Set(s.groups.map(g => g.name));
+  for (const g of s.groups) {
+    let c = cards.groups.get(g.name);
+    if (!c) { c = makeGroup(g); cards.groups.set(g.name, c); }
+    updateGroup(c, g, s.devices);
+  }
+  for (const [n, c] of cards.groups) if (!gnames.has(n)) { c.remove(); cards.groups.delete(n); }
+  let gempty = $("#groups .empty");
+  if (!s.groups.length && !gempty) {
+    gempty = document.createElement("div");
+    gempty.className = "empty";
+    gempty.textContent = "Aucun groupe : un groupe multicast permet de commander plusieurs devices de classe C avec un seul downlink.";
+    $("#groups").appendChild(gempty);
+  } else if (s.groups.length && gempty) gempty.remove();
   const names = new Set(s.devices.map(d => d.name));
   for (const [n, c] of cards.devices) if (!names.has(n)) { c.remove(); cards.devices.delete(n); }
   let empty = $("#devices .empty");
@@ -947,6 +1176,32 @@ nd.onsubmit = async e => {
   openCreds.add(r.name);
   await refresh();
   const c = cards.devices.get(r.name);
+  if (c) { $(".creds-box", c).open = true; c.scrollIntoView({ behavior: "smooth", block: "center" }); }
+};
+
+const ng = $("#newgroup"), ngMsg = $("#newgroup-msg");
+ng.querySelectorAll(".regen").forEach(b => (b.onclick = () => regen(b.previousElementSibling)));
+$("#add-group").onclick = () => {
+  ng.reset();
+  ng.querySelectorAll("input[data-size]").forEach(regen);
+  let i = cards.groups.size + 1;
+  while (cards.groups.has(`groupe-${i}`)) i++;
+  ng.elements.name.value = `groupe-${i}`;
+  ngMsg.textContent = "";
+  ng.hidden = false;
+  ng.elements.name.focus();
+};
+$("#newgroup-cancel").onclick = () => (ng.hidden = true);
+ng.onsubmit = async e => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(ng));
+  body.dr = +body.dr; body.frequency = +body.frequency;
+  ngMsg.className = "msg"; ngMsg.textContent = "création…";
+  const r = await api("POST", "/api/groups", body);
+  if (!r.ok) { ngMsg.className = "msg err"; ngMsg.textContent = r.error || "échec"; return; }
+  ng.hidden = true;
+  await refresh();
+  const c = cards.groups.get(r.name);
   if (c) { $(".creds-box", c).open = true; c.scrollIntoView({ behavior: "smooth", block: "center" }); }
 };
 

@@ -5,6 +5,7 @@
   python -m lorasim run                                     # lance la simulation
   python -m lorasim downlink sim-device-01 --interval 20     # envoie un downlink
   python -m lorasim downlink sim-relais --relay on           # commande un relais / un afficheur
+  python -m lorasim downlink --group eclairage --relay off   # downlink multicast (classe C)
   python -m lorasim reset                                   # efface DevNonces / compteurs
 """
 
@@ -62,6 +63,22 @@ def cmd_init(args):
             "payload_text": "hello {n}",
             "fport": 10,
         })
+    groups = []
+    if args.multicast:
+        members = []
+        for i in range(2):
+            members.append(f"sim-relais-{i + 1:02d}")
+            devices.append({
+                "name": members[-1],
+                "dev_eui": "70b3d57ed0" + secrets.token_hex(3),
+                "join_eui": "0000000000000000",
+                "activation": "otaa",
+                "class": "C",
+                "app_key": secrets.token_hex(16),
+                "interval": 120,
+                "payload": "relay",
+            })
+        groups.append(new_group("eclairage", members))
     cfg = {
         "server": {
             "host": args.host,
@@ -78,6 +95,7 @@ def cmd_init(args):
             "lat": 48.9047, "lon": 2.3057, "alt": 35,
         }],
         "devices": devices,
+        "multicast_groups": groups,
     }
     header = (
         "# Configuration du simulateur LoRaWAN\n"
@@ -98,6 +116,19 @@ def cmd_init(args):
     log("init", "renseignez server.api_token puis lancez « python -m lorasim provision »")
 
 
+def new_group(name: str, members: list[str]) -> dict:
+    """Groupe multicast classe C sur la fréquence RX2 EU868 (869,525 MHz, DR0 = SF12)."""
+    return {
+        "name": name,
+        "mc_addr": "e0" + secrets.token_hex(3),
+        "mc_nwk_s_key": secrets.token_hex(16),
+        "mc_app_s_key": secrets.token_hex(16),
+        "dr": 0,
+        "frequency": 869525000,
+        "devices": members,
+    }
+
+
 def cmd_provision(args):
     from .provision import provision
     cfg = load_config(args.config)
@@ -106,11 +137,20 @@ def cmd_provision(args):
 
 def cmd_downlink(args):
     from . import payloads
-    from .provision import ChirpStack, enqueue
+    from .provision import ChirpStack, enqueue, enqueue_multicast
     cfg = load_config(args.config)
-    dev = next((d for d in cfg["devices"] if d["name"] == args.device), None)
-    if dev is None:
-        raise SystemExit(f"device inconnu : {args.device}")
+    if (args.device is None) == (args.group is None):
+        raise SystemExit("indiquez un device ou --group, pas les deux")
+    if args.group is not None:
+        target = next((g for g in cfg["multicast_groups"] if g["name"] == args.group), None)
+        if target is None:
+            raise SystemExit(f"groupe multicast inconnu : {args.group}")
+        if args.confirmed:
+            raise SystemExit("un downlink multicast ne peut pas être confirmé")
+    else:
+        target = next((d for d in cfg["devices"] if d["name"] == args.device), None)
+        if target is None:
+            raise SystemExit(f"device inconnu : {args.device}")
     try:
         if args.interval is not None:
             fport, data = 1, args.interval.to_bytes(2, "big")
@@ -124,11 +164,19 @@ def cmd_downlink(args):
         raise SystemExit(f"erreur : {e}")
     import grpc
     try:
-        qid = enqueue(ChirpStack(cfg["server"]), dev["dev_eui"], fport, data, args.confirmed)
+        cs = ChirpStack(cfg["server"])
+        if args.group is not None:
+            fcnt = enqueue_multicast(cs, target, cfg["server"].get("tenant_id"), fport, data)
+        else:
+            qid = enqueue(cs, target["dev_eui"], fport, data, args.confirmed)
     except (grpc.RpcError, ValueError) as e:
         msg = f"{e.code().name} - {e.details()}" if isinstance(e, grpc.RpcError) else str(e)
         raise SystemExit(f"erreur : {msg}")
-    when = ("immédiatement (classe C)" if str(dev.get("class", "A")).upper() == "C"
+    if args.group is not None:
+        log("downlink", f"{data.hex()} (FPort {fport}) en file du groupe « {args.group} », FCnt {fcnt} : "
+            f"envoi immédiat aux {len(target.get('devices', []))} membre(s)", "ok")
+        return
+    when = ("immédiatement (classe C)" if str(target.get("class", "A")).upper() == "C"
             else "après le prochain uplink du device (classe A)")
     log("downlink", f"{data.hex()} (FPort {fport}) en file d'attente, id {qid} : envoi {when}", "ok")
 
@@ -146,7 +194,8 @@ async def run(cfg: dict, state: State, only: list[str] | None, web_host: str, we
     from .radio import RadioMedium
 
     server = cfg["server"]
-    medium = RadioMedium(loss=float(cfg.get("radio", {}).get("loss", 0)))
+    medium = RadioMedium(loss=float(cfg.get("radio", {}).get("loss", 0)),
+                         groups=cfg["multicast_groups"])
     for gcfg in cfg["gateways"]:
         host = gcfg.get("server_host") or server["host"]
         port = int(gcfg.get("server_port") or server.get("udp_port", 1700))
@@ -196,6 +245,8 @@ def main(argv=None):
     s.add_argument("--devices", type=int, default=3, help="nombre de devices OTAA")
     s.add_argument("--abp", action="store_true", help="ajoute un device ABP")
     s.add_argument("--class-c", action="store_true", help="ajoute un device de classe C")
+    s.add_argument("--multicast", action="store_true",
+                   help="ajoute 2 relais de classe C dans un groupe multicast « eclairage »")
     s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_init)
 
@@ -211,7 +262,8 @@ def main(argv=None):
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("downlink", help="met un downlink en file d'attente dans ChirpStack")
-    s.add_argument("device", help="nom du device")
+    s.add_argument("device", nargs="?", help="nom du device")
+    s.add_argument("--group", help="nom du groupe multicast (à la place d'un device)")
     g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--interval", type=int, help="nouvel intervalle d'émission (s), FPort 1")
     g.add_argument("--hex", help="données brutes en hexadécimal")

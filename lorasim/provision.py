@@ -44,6 +44,8 @@ class ChirpStack:
         self.profiles = api.DeviceProfileServiceStub(channel)
         self.apps = api.ApplicationServiceStub(channel)
         self.devices = api.DeviceServiceStub(channel)
+        self.multicast = api.MulticastGroupServiceStub(channel)
+        self._mc_ids = {}  # McAddr -> id du groupe dans ChirpStack
 
     def call(self, fn, req):
         return fn(req, metadata=self.md, timeout=10)
@@ -158,6 +160,65 @@ class ChirpStack:
             self.call(self.devices.Activate, api.ActivateDeviceRequest(device_activation=act))
             _p(f"device {dev['name']} activé en ABP (DevAddr {dev['dev_addr']})")
 
+    def ensure_multicast_group(self, app_id: str, group: dict, devices: list[dict], gateways: list[dict]):
+        """Crée ou met à jour le groupe, puis aligne ses membres et passerelles sur la config."""
+        mg = api.MulticastGroup(
+            name=group["name"], application_id=app_id, region=common.Region.EU868,
+            mc_addr=group["mc_addr"].lower(), mc_nwk_s_key=group["mc_nwk_s_key"],
+            mc_app_s_key=group["mc_app_s_key"], group_type=api.MulticastGroupType.CLASS_C,
+            dr=int(group.get("dr", 0)), frequency=int(group.get("frequency", 869525000)),
+            class_c_scheduling_type=api.MulticastGroupSchedulingType.DELAY,
+        )
+        resp = self.call(self.multicast.List, api.ListMulticastGroupsRequest(
+            application_id=app_id, search=group["name"], limit=50))
+        existing = next((g for g in resp.result if g.name == group["name"]), None)
+        if existing:
+            mg.id = existing.id
+            # Le compteur de trames appartient au serveur : ne pas le remettre à zéro
+            mg.f_cnt = self.call(self.multicast.Get, api.GetMulticastGroupRequest(id=existing.id)).multicast_group.f_cnt
+            self.call(self.multicast.Update, api.UpdateMulticastGroupRequest(multicast_group=mg))
+            _p(f"groupe multicast « {group['name']} » mis à jour")
+        else:
+            mg.id = self.call(self.multicast.Create, api.CreateMulticastGroupRequest(multicast_group=mg)).id
+            _p(f"groupe multicast « {group['name']} » créé", "ok")
+
+        wanted = {d["dev_eui"].lower() for d in devices if d["name"] in group.get("devices", [])}
+        resp = self.call(self.devices.List, api.ListDevicesRequest(
+            application_id=app_id, multicast_group_id=mg.id, limit=1000))
+        present = {d.dev_eui for d in resp.result}
+        for eui in wanted - present:
+            self.call(self.multicast.AddDevice, api.AddDeviceToMulticastGroupRequest(
+                multicast_group_id=mg.id, dev_eui=eui))
+        for eui in present - wanted:
+            self.call(self.multicast.RemoveDevice, api.RemoveDeviceFromMulticastGroupRequest(
+                multicast_group_id=mg.id, dev_eui=eui))
+        for gw in gateways:
+            try:
+                self.call(self.multicast.AddGateway, api.AddGatewayToMulticastGroupRequest(
+                    multicast_group_id=mg.id, gateway_id=gw["id"].lower()))
+            except grpc.RpcError as e:
+                if e.code() not in (grpc.StatusCode.ALREADY_EXISTS, grpc.StatusCode.INTERNAL):
+                    raise
+        _p(f"groupe « {group['name']} » : {len(wanted)} device(s), {len(gateways)} passerelle(s)")
+        self._mc_ids[mg.mc_addr] = mg.id
+
+    def multicast_group_id(self, mc_addr: str, tenant_id: str | None) -> str:
+        """Retrouve un groupe par son McAddr, quelle que soit l'application (groupe créé à la main)."""
+        mc_addr = mc_addr.lower()
+        if mc_addr in self._mc_ids:
+            return self._mc_ids[mc_addr]
+        tenant = self.tenant_id(tenant_id)
+        apps = self.call(self.apps.List, api.ListApplicationsRequest(tenant_id=tenant, limit=100))
+        for app in apps.result:
+            groups = self.call(self.multicast.List, api.ListMulticastGroupsRequest(application_id=app.id, limit=100))
+            for g in groups.result:
+                full = self.call(self.multicast.Get, api.GetMulticastGroupRequest(id=g.id)).multicast_group
+                if full.mc_addr.lower() == mc_addr:
+                    self._mc_ids[mc_addr] = g.id
+                    return g.id
+        raise ValueError(f"aucun groupe multicast avec le McAddr {mc_addr} dans ChirpStack "
+                         "(lancez provision ou créez-le dans Applications › Multicast groups)")
+
     def flush_dev_nonces(self, dev_eui: str):
         self.call(self.devices.FlushDevNonces, api.FlushDevNoncesRequest(dev_eui=dev_eui.lower()))
 
@@ -182,6 +243,8 @@ def provision(cfg: dict, state):
                 profiles[key] = cs.ensure_profile(tenant, *key, region_id)
             fcnt = state.device(dev["dev_eui"].lower())["fcnt_up"]
             cs.ensure_device(app_id, profiles[key], dev, fcnt)
+        for group in cfg.get("multicast_groups", []):
+            cs.ensure_multicast_group(app_id, group, devices, cfg["gateways"])
         state.save()
         _p("provisionnement terminé", "ok")
     except grpc.RpcError as e:
@@ -194,6 +257,15 @@ def enqueue(cs: ChirpStack, dev_eui: str, fport: int, data: bytes, confirmed: bo
         raise ValueError("FPort doit être compris entre 1 et 223")
     item = api.DeviceQueueItem(dev_eui=dev_eui.lower(), f_port=fport, data=data, confirmed=confirmed)
     return cs.call(cs.devices.Enqueue, api.EnqueueDeviceQueueItemRequest(queue_item=item)).id
+
+
+def enqueue_multicast(cs: ChirpStack, group: dict, tenant_id: str | None, fport: int, data: bytes) -> int:
+    """Met un downlink dans la file d'un groupe multicast. Renvoie le FCnt attribué."""
+    if not 1 <= fport <= 223:
+        raise ValueError("FPort doit être compris entre 1 et 223")
+    item = api.MulticastGroupQueueItem(
+        multicast_group_id=cs.multicast_group_id(group["mc_addr"], tenant_id), f_port=fport, data=data)
+    return cs.call(cs.multicast.Enqueue, api.EnqueueMulticastGroupQueueItemRequest(queue_item=item)).f_cnt
 
 
 def reset(cfg: dict, state):

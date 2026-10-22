@@ -21,6 +21,8 @@ Simule une (ou plusieurs) passerelle(s) LoRaWAN et des devices classe A ou C
   (avec décodeur JavaScript) et devices avec leurs clés.
 - **Classe C** (`class: C`) : le device écoute en permanence, ChirpStack lui envoie ses
   downlinks immédiatement (RX2, 869,525 MHz) sans attendre d'uplink.
+- **Actionneurs** : relais et afficheur OLED commandés par downlink (voir plus bas).
+- **Multicast** : groupes de devices de classe C commandés par un seul downlink (voir plus bas).
 - **Tableau de bord web temps réel** (http://localhost:8000) : état des passerelles,
   carte par device (DevAddr, FCnt, DR/SF, TXPower, RSSI/SNR + historique, mesures),
   journal en direct filtrable, et actions : uplink immédiat, rejoin, pause, intervalle,
@@ -59,6 +61,7 @@ python3 -m venv .venv
 .venv/bin/python -m lorasim downlink sim-device-01 --hex 0102 --fport 10
 .venv/bin/python -m lorasim downlink sim-actionneur-c --relay on --duration 30
 .venv/bin/python -m lorasim downlink mon-afficheur --text "Salle B12\n21 °C"
+.venv/bin/python -m lorasim downlink --group eclairage --relay off     # multicast
 
 # Repartir de zéro (efface les DevNonces côté serveur et les compteurs locaux)
 .venv/bin/python -m lorasim reset && .venv/bin/python -m lorasim provision
@@ -138,9 +141,10 @@ Si le tableau de bord est ouvert sur le réseau (`--web-host 0.0.0.0`), les clé
 | `devices[].class` | `A` (défaut) ou `C` |
 | `devices[].rssi` | RSSI moyen (dBm), ou un dictionnaire `{nom_passerelle: rssi}` |
 | `devices[].data_rate` | DR initial (0 = SF12 … 5 = SF7) |
+| `multicast_groups[]` | `name`, `mc_addr`, `mc_nwk_s_key`, `mc_app_s_key`, `dr`, `frequency` (Hz), `devices` (noms des membres) |
 
 Les EUI et clés doivent être **entre guillemets** si elles ne contiennent que des chiffres.
-Les compteurs (DevNonce, FCnt) sont sauvegardés dans `config.state.json`.
+Les compteurs (DevNonce, FCnt, FCnt multicast) sont sauvegardés dans `config.state.json`.
 
 ## Payload `sensor` (FPort 2)
 
@@ -195,6 +199,45 @@ selon la clé `interval`, `relay` ou `text`) : le FPort saisi dans *Queue* est i
 **Base64**, c'est le FPort saisi qui compte, et un actionneur refuse une commande reçue sur un autre
 port que le sien (« commande non reconnue » dans le journal).
 
+## Multicast (groupes de classe C)
+
+Un groupe multicast a sa propre adresse (**McAddr**) et ses propres clés de session
+(**McNwkSKey**, **McAppSKey**), partagées par tous ses membres. ChirpStack émet le downlink
+**une seule fois**, sur la fréquence et le data rate du groupe (par défaut 869,525 MHz, DR0/SF12),
+et tous les membres qui écoutent le reçoivent en même temps. Exemple : un seul downlink
+`--relay off` éteint tous les relais du groupe « eclairage ».
+
+```bash
+.venv/bin/python -m lorasim init --devices 0 --multicast   # 2 relais classe C + groupe « eclairage »
+.venv/bin/python -m lorasim provision                       # crée aussi le groupe dans ChirpStack
+.venv/bin/python -m lorasim downlink --group eclairage --relay on
+```
+
+Comportement des devices simulés, conforme à LoRaWAN :
+
+- seuls les membres de **classe C**, allumés et joints, reçoivent (un membre de classe A est
+  signalé dans le journal : « ne recevra pas ») ;
+- le device n'entend la trame que si la **fréquence et le data rate** du groupe dans ChirpStack
+  sont ceux qu'il attend (sinon : « non reçu » dans le journal) ;
+- MIC vérifié avec la McNwkSKey, compteur de trames propre au groupe (une trame plus ancienne,
+  par exemple après avoir recréé le groupe dans ChirpStack, est rejetée) ;
+- un downlink multicast n'est jamais confirmé et ne porte pas de commandes MAC ;
+- un actionneur confirme son nouvel état par un uplink **après un délai aléatoire de 0 à 10 s**,
+  pour que tous les membres ne répondent pas en même temps.
+
+Tableau de bord : section **Groupes multicast** pour créer un groupe (adresse et clés générées),
+cocher ses membres, envoyer une commande (relais, texte pour les afficheurs, octets bruts) et
+afficher les paramètres à recopier dans ChirpStack (*Applications › Multicast groups ›
+Add multicast-group*, *Group type* `Class-C`, *Class-C scheduling type* `Delay` ; membres :
+*Devices*, cocher, *Selected devices › Add to multicast-group*).
+
+À savoir côté ChirpStack (vérifié avec la version 4.16) :
+
+- la file d'un groupe n'accepte que des octets (*Data (HEX)*) : pas de JSON ni de codec ;
+- associer une passerelle au groupe est facultatif : sans passerelle, ChirpStack émet par celles
+  qui entendent les membres (`provision` associe quand même les passerelles de la config) ;
+- un groupe créé à la main est retrouvé par son McAddr, quelle que soit l'application.
+
 ## Organisation du code
 
 | Fichier | Contenu |
@@ -202,10 +245,11 @@ port que le sien (« commande non reconnue » dans le journal).
 | `lorasim/crypto.py` | AES, CMAC, MIC, chiffrement FRMPayload, dérivation des clés de session |
 | `lorasim/phy.py` | construction / décodage des trames (Join Request/Accept, data up/down) |
 | `lorasim/mac.py` | commandes MAC et réponses |
-| `lorasim/device.py` | machine à états d'un device classe A |
+| `lorasim/device.py` | machine à états d'un device (classes A et C, réception multicast) |
 | `lorasim/gateway.py` | Semtech UDP Packet Forwarder |
 | `lorasim/radio.py` | canal radio simulé (RSSI, SNR, sensibilité par SF, pertes) |
-| `lorasim/provision.py` | API gRPC ChirpStack |
+| `lorasim/payloads.py` | capteur, relais, afficheur et codec JavaScript |
+| `lorasim/provision.py` | API gRPC ChirpStack (devices, groupes multicast, files de downlinks) |
 | `lorasim/config.py` | lecture / écriture de `config.yaml` |
 | `lorasim/web.py`, `static/index.html` | tableau de bord (aiohttp, Server-Sent Events) |
 | `lorasim/events.py` | bus d'événements alimentant le journal web |

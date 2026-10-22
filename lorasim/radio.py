@@ -26,9 +26,10 @@ class RadioMedium:
     toutes les passerelles à portée, chaque downlink est reçu par tous les
     devices (qui filtrent selon leur DevAddr / état de join)."""
 
-    def __init__(self, loss: float = 0.0):
+    def __init__(self, loss: float = 0.0, groups: list | None = None):
         self.gateways = []
         self.devices = []
+        self.groups = groups if groups is not None else []  # cfg["multicast_groups"]
         self.loss = loss
 
     def link_budget(self, device, gateway) -> tuple[float, float]:

@@ -15,9 +15,12 @@ def load_config(path: str) -> dict:
         raise SystemExit("aucune passerelle définie dans la configuration")
     if not cfg.get("devices"):
         cfg["devices"] = []
+    if not cfg.get("multicast_groups"):
+        cfg["multicast_groups"] = []
     # Un EUI non quoté composé uniquement de chiffres serait lu comme un entier par YAML
-    for item in cfg["gateways"] + cfg["devices"]:
-        for k in ("id", "dev_eui", "join_eui", "app_key", "dev_addr", "nwk_s_key", "app_s_key"):
+    for item in cfg["gateways"] + cfg["devices"] + cfg["multicast_groups"]:
+        for k in ("id", "dev_eui", "join_eui", "app_key", "dev_addr", "nwk_s_key", "app_s_key",
+                  "mc_addr", "mc_nwk_s_key", "mc_app_s_key"):
             if k in item and not isinstance(item[k], str):
                 raise SystemExit(f"{item.get('name', '?')} : la valeur de « {k} » doit être entre guillemets")
     return cfg

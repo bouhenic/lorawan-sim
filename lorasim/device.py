@@ -1,4 +1,4 @@
-"""Device LoRaWAN 1.0.x simulé (OTAA ou ABP, classe A ou C)."""
+"""Device LoRaWAN 1.0.x simulé (OTAA ou ABP, classe A ou C, groupes multicast en classe C)."""
 
 import asyncio
 import collections
@@ -12,6 +12,8 @@ from .radio import EU868_DATR, EU868_DEFAULT_CHANNELS
 
 JOIN_TIMEOUT = 8      # s : RX2 du Join Accept à 6 s + marge réseau
 ACK_TIMEOUT = 4       # s : attente d'un ACK pour un uplink confirmé
+MC_REPLY_SPREAD = 10  # s : délai aléatoire max avant de répondre à une commande multicast
+MC_DEFAULT_FREQ = 869_525_000  # RX2 EU868, fréquence habituelle des groupes multicast classe C
 
 
 class Device:
@@ -128,11 +130,22 @@ class Device:
             self._resume.set()
             self.log("allumé")
 
-    def report(self, msg: str):
-        """L'état de l'actionneur a changé : on l'annonce par un uplink immédiat."""
+    def report(self, msg: str, spread: float = 0):
+        """L'état de l'actionneur a changé : on l'annonce par un uplink immédiat. Après une
+        commande multicast, on attend un délai aléatoire pour que tous les membres du
+        groupe ne répondent pas en même temps (collisions)."""
+        delay = random.uniform(0, spread) if spread else 0
+        if delay:
+            msg += f" ; état envoyé dans {delay:.1f} s (délai aléatoire multicast)"
         self.log(msg, "ok")
         if self.dev_addr is not None and not self.paused:
-            self.wake.set()
+            if delay:
+                asyncio.get_running_loop().call_later(delay, self.wake.set)
+            else:
+                self.wake.set()
+
+    def groups(self) -> list[dict]:
+        return [g for g in self.medium.groups if self.name in g.get("devices", [])]
 
     def press_button(self) -> bool:
         if not hasattr(self.payload, "press"):
@@ -150,6 +163,7 @@ class Device:
         return {
             "name": self.name, "dev_eui": self.dev_eui_hex, "activation": self.activation,
             "payload": self.cfg.get("payload", "sensor"),
+            "groups": [g["name"] for g in self.groups()],
             "class": self.device_class, "status": "pause" if self.paused else self.status,
             "dev_addr": f"{self.dev_addr:08x}" if self.dev_addr is not None else None,
             "fcnt_up": self.st["fcnt_up"], "fcnt_down": max(self.st["fcnt_down"], 0),
@@ -268,8 +282,13 @@ class Device:
             if self._join_future and not self._join_future.done():
                 self._handle_join_accept(frame)
         elif mtype in (phy.UNCONFIRMED_DOWN, phy.CONFIRMED_DOWN):
-            if self.dev_addr is not None and phy.peek_dev_addr(frame) == self.dev_addr:
+            addr = phy.peek_dev_addr(frame)
+            if self.dev_addr is not None and addr == self.dev_addr:
                 self._handle_data_down(frame, gateway)
+                return
+            for g in self.groups():
+                if int(g["mc_addr"], 16) == addr:
+                    self._handle_multicast(g, frame, freq, datr, gateway)
 
     def _handle_join_accept(self, frame: bytes):
         ja = phy.parse_join_accept(self.app_key, frame)
@@ -334,7 +353,45 @@ class Device:
         if dd.fpending or dd.confirmed:
             self.wake.set()
 
-    def _handle_app_downlink(self, fport: int, data: bytes):
+    def _handle_multicast(self, group: dict, frame: bytes, freq: int, datr: str, gateway):
+        """Trame adressée au McAddr d'un groupe : mêmes règles qu'un vrai device de classe C."""
+        name = group["name"]
+        if self.paused or self.dev_addr is None:
+            return  # éteint, ou pas encore joint : n'écoute pas
+        if self.device_class != "C":
+            self.log(f"multicast « {name} » non reçu : seul un device de classe C écoute en permanence", "warn")
+            return
+        want_freq = int(group.get("frequency", MC_DEFAULT_FREQ))
+        want_datr = EU868_DATR.get(int(group.get("dr", 0)))
+        if (freq, datr) != (want_freq, want_datr):
+            self.log(f"multicast « {name} » émis sur {freq / 1e6:.3f} MHz {datr} mais le device écoute "
+                     f"sur {want_freq / 1e6:.3f} MHz {want_datr} : non reçu", "warn")
+            return
+        counters = self.st["mc_fcnt"]
+        last = counters.get(name, -1)
+        dd = phy.parse_data_down(bytes.fromhex(group["mc_nwk_s_key"]), bytes.fromhex(group["mc_app_s_key"]),
+                                 frame, last)
+        if dd is None:
+            self.log(f"multicast « {name} » : MIC invalide (McNwkSKey différente ?), trame ignorée", "warn")
+            return
+        if dd.fcnt <= last:
+            if dd.fcnt < last:  # égal : la même trame relayée par une autre passerelle
+                self.log(f"multicast « {name} » : FCnt {dd.fcnt} déjà dépassé (dernier {last}), "
+                         "trame ignorée (groupe recréé dans ChirpStack ?)", "warn")
+            return
+        if dd.confirmed or not dd.fport:
+            self.log(f"multicast « {name} » : trame non conforme (confirmée ou FPort 0), ignorée", "warn")
+            return
+        counters[name] = dd.fcnt
+        self.state.save()
+        self.downlinks += 1
+        self.last_down = time.time()
+        self.last_down_info = f"multicast « {name} », FPort {dd.fport} : {dd.payload.hex() or '(vide)'}"
+        self.log(f"Downlink multicast « {name} » FCnt={dd.fcnt} via {gateway.name} "
+                 f"FPort={dd.fport} data={dd.payload.hex()}", "down")
+        self._handle_app_downlink(dd.fport, dd.payload, spread=MC_REPLY_SPREAD)
+
+    def _handle_app_downlink(self, fport: int, data: bytes, spread: float = 0):
         """FPort 1, 2 octets : nouvel intervalle d'émission (secondes) ; sinon commande d'actionneur."""
         if fport == 1 and len(data) == 2:
             new = int.from_bytes(data, "big")
@@ -346,6 +403,6 @@ class Device:
             return
         msg = handler(fport, data)
         if msg:
-            self.report(msg)
+            self.report(msg, spread)
         else:
             self.log(f"FPort {fport} : commande non reconnue ({data.hex() or 'vide'})", "warn")

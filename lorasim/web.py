@@ -10,12 +10,17 @@
   POST /api/devices/{name}/{action}
        uplink | rejoin | pause | resume | interval {seconds} | downlink {hex, fport, confirmed}
        button (bouton local du relais) | command {relay: on|off|toggle, duration} ou {text}
+  POST /api/groups                crée un groupe multicast {name, mc_addr, mc_nwk_s_key, mc_app_s_key, dr, frequency}
+  DELETE /api/groups/{name}       supprime un groupe
+  POST /api/groups/{name}/members {device, member} : ajoute / retire un device
+  POST /api/groups/{name}/command {relay, duration} | {text} | {hex, fport} : downlink multicast
 """
 
 import asyncio
 import json
 import pathlib
 import re
+import secrets
 import time
 
 from aiohttp import web
@@ -55,6 +60,10 @@ class Dashboard:
         app.router.add_post("/api/devices", self.create_device)
         app.router.add_delete("/api/devices/{name}", self.delete_device)
         app.router.add_post("/api/devices/{name}/{action}", self.action)
+        app.router.add_post("/api/groups", self.create_group)
+        app.router.add_delete("/api/groups/{name}", self.delete_group)
+        app.router.add_post("/api/groups/{name}/members", self.group_members)
+        app.router.add_post("/api/groups/{name}/command", self.group_command)
         self.app = app
 
     async def start(self, host: str, port: int):
@@ -77,6 +86,7 @@ class Dashboard:
                        "api": bool(server.get("api_token"))},
             "gateways": [g.snapshot() for g in self.medium.gateways],
             "devices": [d.snapshot() for d in self.medium.devices],
+            "groups": [{**g, "devices": list(g.get("devices", []))} for g in self.medium.groups],
         })
 
     async def stream(self, request):
@@ -199,6 +209,9 @@ class Dashboard:
         dev.stop()
         self.medium.devices.remove(dev)
         self.cfg["devices"] = [d for d in self.cfg["devices"] if d["name"] != dev.name]
+        for g in self.medium.groups:
+            if dev.name in g.get("devices", []):
+                g["devices"].remove(dev.name)
         self._save()
         log("web", f"device {dev.name} supprimé du simulateur (pensez à le supprimer dans ChirpStack)", "warn")
         return web.json_response({"ok": True})
@@ -245,6 +258,95 @@ class Dashboard:
         else:
             raise web.HTTPNotFound(text=f"action inconnue : {action}")
         return web.json_response({"ok": True})
+
+    # --- groupes multicast ----------------------------------------------------------
+
+    def _group(self, name: str) -> dict:
+        for g in self.medium.groups:
+            if g["name"] == name:
+                return g
+        raise web.HTTPNotFound(text=f"groupe inconnu : {name}")
+
+    async def create_group(self, request):
+        body = await request.json()
+        try:
+            name = str(body.get("name", "")).strip()
+            if not NAME_RE.match(name):
+                raise ValueError("nom invalide : lettres, chiffres, « - _ . », 50 caractères max")
+            if any(g["name"] == name for g in self.medium.groups):
+                raise ValueError(f"le groupe « {name} » existe déjà")
+            mc_addr = _hex_field(body, "mc_addr", "McAddr", 4, "e0" + secrets.token_hex(3))
+            if any(g["mc_addr"].lower() == mc_addr for g in self.medium.groups):
+                raise ValueError(f"le McAddr {mc_addr} est déjà utilisé")
+            try:
+                dr, freq = int(body.get("dr", 0)), int(body.get("frequency", 869525000))
+            except (TypeError, ValueError):
+                raise ValueError("data rate ou fréquence invalide")
+            if not 0 <= dr <= 5:
+                raise ValueError("data rate : 0 (SF12) à 5 (SF7)")
+            if not 863_000_000 <= freq <= 870_000_000:
+                raise ValueError("fréquence hors de la bande EU868 (863 à 870 MHz, en Hz)")
+            group = {
+                "name": name, "mc_addr": mc_addr,
+                "mc_nwk_s_key": _hex_field(body, "mc_nwk_s_key", "McNwkSKey", 16, secrets.token_hex(16)),
+                "mc_app_s_key": _hex_field(body, "mc_app_s_key", "McAppSKey", 16, secrets.token_hex(16)),
+                "dr": dr, "frequency": freq, "devices": [],
+            }
+        except ValueError as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+        self.medium.groups.append(group)  # même liste que cfg["multicast_groups"]
+        self._save()
+        log("web", f"groupe multicast « {name} » créé (McAddr {mc_addr}) : à créer aussi dans ChirpStack", "ok")
+        return web.json_response({"ok": True, "name": name})
+
+    async def delete_group(self, request):
+        group = self._group(request.match_info["name"])
+        self.medium.groups.remove(group)
+        self._save()
+        log("web", f"groupe multicast « {group['name']} » supprimé du simulateur "
+            "(pensez à le supprimer dans ChirpStack)", "warn")
+        return web.json_response({"ok": True})
+
+    async def group_members(self, request):
+        group = self._group(request.match_info["name"])
+        body = await request.json()
+        dev = self._device(str(body.get("device", "")))
+        members = group.setdefault("devices", [])
+        if body.get("member") and dev.name not in members:
+            members.append(dev.name)
+            log("web", f"{dev.name} ajouté au groupe « {group['name']} » (à faire aussi dans ChirpStack)", "ok")
+        elif not body.get("member") and dev.name in members:
+            members.remove(dev.name)
+            log("web", f"{dev.name} retiré du groupe « {group['name']} »", "warn")
+        self._save()
+        return web.json_response({"ok": True})
+
+    async def group_command(self, request):
+        import grpc
+        from .provision import ChirpStack, enqueue_multicast
+        group = self._group(request.match_info["name"])
+        body = await request.json()
+        try:
+            if "relay" in body:
+                fport, data = payloads.relay_command(str(body["relay"]), int(body.get("duration") or 0))
+            elif "text" in body:
+                fport, data = payloads.display_command(str(body["text"]))
+            else:
+                fport = int(body.get("fport", 10))
+                data = bytes.fromhex(str(body.get("hex", "")).replace(" ", ""))
+            if self._chirpstack is None:
+                self._chirpstack = ChirpStack(self.cfg["server"])
+            fcnt = await asyncio.to_thread(enqueue_multicast, self._chirpstack, group,
+                                           self.cfg["server"].get("tenant_id"), fport, data)
+        except SystemExit as e:  # clé API absente
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+        except ValueError as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
+        except grpc.RpcError as e:
+            return web.json_response({"ok": False, "error": f"{e.code().name} : {e.details()}"}, status=502)
+        log("web", f"downlink multicast {data.hex() or '(vide)'} FPort {fport} mis en file pour le groupe "
+            f"« {group['name']} » (FCnt {fcnt})", "ok")
+        return web.json_response({"ok": True, "fcnt": fcnt})
 
     async def _downlink(self, dev, fport: int, data: bytes, confirmed: bool):
         import grpc
