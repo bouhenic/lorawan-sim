@@ -19,7 +19,8 @@ CODEC_JS = """\
 //   FPort 2 capteur   : temp int16 (x10, °C) | humidité uint8 (%) | batterie uint16 (mV) | compteur uint8
 //   FPort 3 relais    : état uint8 (0/1) | commutations uint16 | origine uint8
 //   FPort 4 afficheur : messages reçus uint16 | octets du dernier message uint8
-// Downlinks (indiquer le FPort correspondant lors de l'envoi)
+// Downlinks : en JSON, ChirpStack utilise le fPort renvoyé ici (le FPort saisi est ignoré) ;
+// en HEX/Base64, c'est le FPort saisi qui compte
 //   FPort 1 : {"interval": 60}          intervalle d'émission en secondes (tous les devices)
 //   FPort 3 : {"relay": 1}              0 = OFF, 1 = ON, "toggle" = basculer
 //             {"relay": 1, "duration": 30}  puis retour à l'état précédent après 30 s

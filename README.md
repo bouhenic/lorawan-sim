@@ -174,7 +174,7 @@ file de downlinks ChirpStack (clé API nécessaire).
 | uplink | 1-2 | nombre de commutations |
 | uplink | 3 | origine : 0 démarrage, 1 commande réseau, 2 bouton local, 3 fin de temporisation |
 
-JSON à saisir dans ChirpStack (*Queue*, FPort 3) : `{"relay": 1}`, `{"relay": 0}`,
+JSON à saisir dans ChirpStack (*Queue*) : `{"relay": 1}`, `{"relay": 0}`,
 `{"relay": "toggle", "duration": 30}`. Le bouton *Bouton local* du tableau de bord simule un
 appui sur le bouton physique : l'état change et remonte au serveur.
 
@@ -186,9 +186,14 @@ appui sur le bouton physique : l'état change et remonte au serveur.
 | uplink | 0-1 | nombre de messages reçus |
 | uplink | 2 | longueur du dernier message (octets) |
 
-JSON (*Queue*, FPort 4) : `{"text": "Salle B12\n21 °C"}`. L'écran affiche 5 lignes de
+JSON (*Queue*) : `{"text": "Salle B12\n21 °C"}`. L'écran affiche 5 lignes de
 21 caractères (les lignes trop longues sont coupées). Le texte est limité à **51 octets** :
 c'est la taille maximale d'un downlink à SF12, utilisé en RX2 et donc par la classe C.
+
+En **JSON**, ChirpStack v4 envoie la trame sur le `fPort` renvoyé par `encodeDownlink` (1, 3 ou 4
+selon la clé `interval`, `relay` ou `text`) : le FPort saisi dans *Queue* est ignoré. En **HEX** ou
+**Base64**, c'est le FPort saisi qui compte, et un actionneur refuse une commande reçue sur un autre
+port que le sien (« commande non reconnue » dans le journal).
 
 ## Organisation du code
 
