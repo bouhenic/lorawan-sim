@@ -3,12 +3,13 @@
   GET  /                          page HTML
   GET  /api/state                 état des passerelles et devices (JSON)
   GET  /api/events                flux des événements (Server-Sent Events)
-  GET  /api/codec                 décodeur JavaScript du payload « sensor »
+  GET  /api/codec                 codec JavaScript (capteur, relais, afficheur)
   POST /api/gateways/{id}/server  {host, port} : change le serveur de la passerelle
   POST /api/devices               crée un device (à enregistrer soi-même dans ChirpStack)
   DELETE /api/devices/{name}      supprime un device
   POST /api/devices/{name}/{action}
        uplink | rejoin | pause | resume | interval {seconds} | downlink {hex, fport, confirmed}
+       button (bouton local du relais) | command {relay: on|off|toggle, duration} ou {text}
 """
 
 import asyncio
@@ -100,7 +101,7 @@ class Dashboard:
         return resp
 
     async def codec(self, request):
-        return web.Response(text=payloads.SENSOR_CODEC_JS, content_type="text/plain")
+        return web.Response(text=payloads.CODEC_JS, content_type="text/plain")
 
     def _save(self):
         save_config(self.config_path, self.cfg)
@@ -169,8 +170,8 @@ class Dashboard:
             except (ValueError, KeyError, IndexError):
                 raise ValueError("texte invalide : seul {n} (compteur) est autorisé entre accolades")
             dcfg["payload_text"], dcfg["fport"] = text, 10
-        elif kind != "sensor":
-            raise ValueError("payload : sensor ou text")
+        elif kind not in ("sensor", "relay", "display"):
+            raise ValueError("payload : sensor, text, relay ou display")
         dcfg["confirmed"] = bool(body.get("confirmed", False))
         return dcfg
 
@@ -223,18 +224,32 @@ class Dashboard:
         elif action == "interval":
             dev.set_interval(float(body.get("seconds", 60)))
         elif action == "downlink":
-            return await self._downlink(dev, body)
+            try:
+                data = bytes.fromhex(str(body.get("hex", "")).replace(" ", ""))
+                fport = int(body.get("fport", 10))
+            except ValueError as e:
+                return web.json_response({"ok": False, "error": str(e)}, status=400)
+            return await self._downlink(dev, fport, data, bool(body.get("confirmed", False)))
+        elif action == "command":
+            try:
+                if "relay" in body:
+                    fport, data = payloads.relay_command(str(body["relay"]), int(body.get("duration") or 0))
+                else:
+                    fport, data = payloads.display_command(str(body.get("text", "")))
+            except ValueError as e:
+                return web.json_response({"ok": False, "error": str(e)}, status=400)
+            return await self._downlink(dev, fport, data, False)
+        elif action == "button":
+            if not dev.press_button():
+                return web.json_response({"ok": False, "error": "ce device n'a pas de bouton"}, status=400)
         else:
             raise web.HTTPNotFound(text=f"action inconnue : {action}")
         return web.json_response({"ok": True})
 
-    async def _downlink(self, dev, body: dict):
+    async def _downlink(self, dev, fport: int, data: bytes, confirmed: bool):
         import grpc
         from .provision import ChirpStack, enqueue
         try:
-            data = bytes.fromhex(str(body.get("hex", "")).replace(" ", ""))
-            fport = int(body.get("fport", 10))
-            confirmed = bool(body.get("confirmed", False))
             if self._chirpstack is None:
                 self._chirpstack = ChirpStack(self.cfg["server"])
             qid = await asyncio.to_thread(

@@ -230,6 +230,33 @@ pre.codec { font-family: var(--mono); font-size: 11.5px; background: var(--surfa
 button.danger { color: var(--bad); }
 button.danger.armed { background: var(--bad); color: #fff; border-color: transparent; }
 .form [hidden], .form label.field[hidden] { display: none; }
+
+/* Actionneurs : relais (voyant) et afficheur (écran OLED 128x64, 5 lignes de 21 caractères) */
+.ctrl { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.ctrl-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.lamp {
+  width: 34px; height: 34px; border-radius: 50%; flex: none;
+  background: var(--surface-2); border: 2px solid var(--border); transition: background .2s, box-shadow .2s;
+}
+.lamp.on { background: #f5b301; border-color: #c98f00; box-shadow: 0 0 14px 3px rgba(245, 179, 1, .5); }
+.ctrl .big { font-size: 20px; font-weight: 650; }
+.ctrl .sub { font-size: 12px; color: var(--text-2); }
+.ctrl .buttons { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-left: auto; }
+.ctrl .buttons input { width: 92px; }
+.oled {
+  font-family: var(--mono); font-size: 13px; line-height: 1.2; white-space: pre; overflow: hidden;
+  width: calc(21ch + 24px); aspect-ratio: 2 / 1; padding: 6px 12px; flex: none;
+  background: #040607; color: #e3f1ff; border: 4px solid #2b2d2f; border-radius: 6px;
+  text-shadow: 0 0 4px rgba(150, 200, 255, .45);
+}
+.dispform { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
+.dispform textarea {
+  font: inherit; font-family: var(--mono); font-size: 13px; color: var(--text); resize: vertical;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px;
+}
+.dispform .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.dispform .count { font-size: 12px; color: var(--text-3); margin-left: auto; font-variant-numeric: tabular-nums; }
+.dispform .count.over { color: var(--bad); font-weight: 600; }
 @media (max-width: 560px) { .form { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
@@ -280,7 +307,12 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
           <label class="field">Intervalle d'émission (s)
             <input name="interval" type="number" min="5" value="30"></label>
           <label class="field">Payload
-            <select name="payload"><option value="sensor">Capteur temp./humidité (FPort 2)</option><option value="text">Texte (FPort 10)</option></select></label>
+            <select name="payload">
+              <option value="sensor">Capteur temp./humidité (FPort 2)</option>
+              <option value="relay">Actionneur : relais (FPort 3)</option>
+              <option value="display">Afficheur OLED (FPort 4)</option>
+              <option value="text">Texte (FPort 10)</option>
+            </select></label>
           <label class="field text" hidden>Texte ({n} = compteur)
             <input name="payload_text" value="hello {n}"></label>
           <div class="row full">
@@ -294,7 +326,7 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
           </div>
         </div>
         <details class="box">
-          <summary>Décodeur JavaScript du payload capteur (à coller dans le device profile ChirpStack)</summary>
+          <summary>Codec JavaScript capteur / relais / afficheur (à coller dans le device profile ChirpStack)</summary>
           <div class="hint">Device profile › onglet <i>Codec</i> › <i>JavaScript functions</i>.
             <button type="button" class="copy" id="codec-copy">copier</button></div>
           <pre class="codec" id="codec"></pre>
@@ -372,6 +404,49 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
       </form>
       <div class="dlmsg"></div>
     </details>
+  </div>
+</template>
+
+<template id="tpl-relay">
+  <div class="ctrl">
+    <div class="ctrl-row">
+      <span class="lamp" data-f="lamp"></span>
+      <div>
+        <div class="big" data-f="relay"></div>
+        <div class="sub" data-f="relay_sub"></div>
+      </div>
+      <div class="buttons">
+        <button data-r="on" class="primary">ON</button>
+        <button data-r="off">OFF</button>
+        <input type="number" min="1" max="65535" placeholder="durée (s)" aria-label="Durée (s), facultatif">
+        <button data-b title="Simule un appui sur le bouton physique du relais">Bouton local</button>
+      </div>
+    </div>
+    <div class="hint">ON / OFF passent par la file de downlinks ChirpStack, comme une commande
+      envoyée par une application. Dans ChirpStack : <i>Queue</i>, FPort <code>3</code>,
+      JSON <code>{"relay": 1}</code>, <code>{"relay": 0}</code> ou <code>{"relay": "toggle", "duration": 30}</code>.</div>
+    <div class="dlmsg"></div>
+  </div>
+</template>
+
+<template id="tpl-display">
+  <div class="ctrl">
+    <div class="ctrl-row">
+      <div class="oled" data-f="oled" role="img" aria-label="Écran de l'afficheur"></div>
+      <form class="dispform">
+        <textarea name="text" rows="3" placeholder="Salle B12&#10;21,5 °C" aria-label="Texte à afficher"></textarea>
+        <div class="row">
+          <button class="primary" type="submit">Envoyer</button>
+          <button type="button" data-clear>Effacer l'écran</button>
+          <span class="count"></span>
+        </div>
+      </form>
+    </div>
+    <div class="sub" data-f="display_sub"></div>
+    <div class="hint">Le texte passe par la file de downlinks ChirpStack. Dans ChirpStack : <i>Queue</i>,
+      FPort <code>4</code>, JSON <code>{"text": "Salle B12\n21 °C"}</code>. 5 lignes de 21 caractères,
+      51 octets max (taille d'un downlink à SF12).</div>
+    <div class="dlmsg"></div>
   </div>
 </template>
 
@@ -594,6 +669,7 @@ function makeDevice(d) {
   help.innerHTML = HELP[d.activation].map(t =>
     `<li>${t.replace("{C}", d.class === "C" ? ", « Supports Class-C » coché" : "")}</li>`).join("");
   if (openCreds.has(d.name) || (d.status === "pause" && d.uplinks === 0)) $(".creds-box", card).open = true;
+  if (d.payload === "relay" || d.payload === "display") makeControls(card, d);
   const form = $(".dlform", card), msg = $(".dlmsg", card);
   form.onsubmit = async e => {
     e.preventDefault();
@@ -613,6 +689,75 @@ function makeDevice(d) {
   };
   $("#devices").appendChild(card);
   return card;
+}
+
+// --- actionneurs ----------------------------------------------------------------
+const utf8Len = s => new TextEncoder().encode(s).length;
+function queued(msg, d, r) {
+  if (r.ok) {
+    msg.className = "dlmsg ok";
+    msg.textContent = d.class === "C" ? "En file : émission immédiate (classe C)."
+      : "En file : partira après le prochain uplink (classe A).";
+  } else {
+    msg.className = "dlmsg err";
+    msg.textContent = r.error || "échec";
+  }
+}
+function makeControls(card, d) {
+  const ctrl = $(`#tpl-${d.payload}`).content.firstElementChild.cloneNode(true);
+  const msg = $(".dlmsg", ctrl);
+  if (d.payload === "relay") {
+    ctrl.querySelectorAll("button[data-r]").forEach(b => {
+      b.onclick = async () => {
+        const dur = parseInt($("input", ctrl).value, 10);
+        msg.className = "dlmsg"; msg.textContent = "envoi…";
+        queued(msg, d, await post(d.name, "command", { relay: b.dataset.r, duration: dur > 0 ? dur : 0 }));
+      };
+    });
+    $("button[data-b]", ctrl).onclick = async () => { await post(d.name, "button"); refresh(); };
+  } else {
+    const form = $(".dispform", ctrl), ta = form.elements.text, count = $(".count", form);
+    const send = async text => {
+      msg.className = "dlmsg"; msg.textContent = "envoi…";
+      queued(msg, d, await post(d.name, "command", { text }));
+    };
+    ta.oninput = () => {
+      const n = utf8Len(ta.value);
+      count.textContent = `${n} / 51 octets`;
+      count.classList.toggle("over", n > 51);
+    };
+    ta.oninput();
+    form.onsubmit = e => { e.preventDefault(); send(ta.value); };
+    $("button[data-clear]", form).onclick = () => send("");
+  }
+  card.querySelector(".values").after(ctrl);
+}
+function updateControls(card, d) {
+  const v = d.values || {};
+  if (d.payload === "relay") {
+    const on = v.relay === 1;
+    f(card, "lamp").classList.toggle("on", on);
+    f(card, "relay").textContent = on ? "ON" : "OFF";
+    let sub = `${v.switches} commutation${v.switches > 1 ? "s" : ""} · dernière origine : ${v.source}`;
+    if (v.pulse_end) {
+      const left = Math.max(0, Math.round(v.pulse_end - (Date.now() / 1000 - clientOffset)));
+      sub += ` · retour à ${on ? "OFF" : "ON"} dans ${left} s`;
+    }
+    f(card, "relay_sub").textContent = sub;
+    const btns = card.querySelectorAll(".ctrl button[data-r]");
+    btns.forEach(b => {
+      b.disabled = !apiEnabled;
+      b.title = apiEnabled ? "" : "Renseignez server.api_token dans la configuration";
+    });
+    $(".ctrl button[data-b]", card).disabled = d.status === "pause";
+  } else if (d.payload === "display") {
+    f(card, "oled").textContent = (v.lines || []).join("\n");
+    f(card, "display_sub").textContent = `${v.messages} message${v.messages > 1 ? "s" : ""} reçu${v.messages > 1 ? "s" : ""}`;
+    card.querySelectorAll(".dispform button").forEach(b => {
+      b.disabled = !apiEnabled;
+      b.title = apiEnabled ? "" : "Renseignez server.api_token dans la configuration";
+    });
+  }
 }
 
 function updateDevice(card, d) {
@@ -669,6 +814,7 @@ function updateDevice(card, d) {
   const sub = card.querySelector('.dlform button[type="submit"]');
   sub.disabled = !apiEnabled;
   sub.title = apiEnabled ? "" : "Renseignez server.api_token dans la configuration";
+  updateControls(card, d);
   const key = d.rssi_history.join(",");
   if (card.dataset.spark !== key) { card.dataset.spark = key; drawSpark(card, d.rssi_history); }
 }
@@ -765,7 +911,13 @@ function syncForm() {
 }
 nd.querySelectorAll(".regen").forEach(b => (b.onclick = () => regen(b.previousElementSibling)));
 nd.elements.activation.onchange = syncForm;
-nd.elements.payload.onchange = syncForm;
+nd.elements.payload.onchange = () => {
+  if (["relay", "display"].includes(nd.elements.payload.value)) {
+    nd.elements.class.value = "C";
+    nd.elements.interval.value = 120;
+  }
+  syncForm();
+};
 $("#add-device").onclick = () => {
   nd.reset();
   nd.querySelectorAll("input[data-size]").forEach(regen);

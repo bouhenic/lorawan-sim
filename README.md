@@ -57,6 +57,8 @@ python3 -m venv .venv
 # Envoyer un downlink (il part après le prochain uplink, classe A)
 .venv/bin/python -m lorasim downlink sim-device-01 --interval 20 --confirmed
 .venv/bin/python -m lorasim downlink sim-device-01 --hex 0102 --fport 10
+.venv/bin/python -m lorasim downlink sim-actionneur-c --relay on --duration 30
+.venv/bin/python -m lorasim downlink mon-afficheur --text "Salle B12\n21 °C"
 
 # Repartir de zéro (efface les DevNonces côté serveur et les compteurs locaux)
 .venv/bin/python -m lorasim reset && .venv/bin/python -m lorasim provision
@@ -106,7 +108,7 @@ Sans passer par `provision`, on reproduit la démarche d'une vraie installation 
    DevEUI et clés sont générés (↻) ou saisis. Le device est créé **éteint**.
 3. Dans ChirpStack, créer un device profile et le device en recopiant les identifiants
    affichés sur sa carte (*Identifiants à saisir dans ChirpStack*, avec la marche à suivre).
-   Le décodeur JavaScript du payload capteur est copiable depuis le formulaire de création.
+   Le codec JavaScript (capteur, relais, afficheur) est copiable depuis le formulaire de création.
 4. *Allumer* le device : Join Request (OTAA) ou uplinks directs (ABP). Sans enregistrement,
    le join échoue et le device réessaie, comme un vrai capteur.
 
@@ -131,7 +133,7 @@ Si le tableau de bord est ouvert sur le réseau (`--web-host 0.0.0.0`), les clé
 | `gateways[].server_host` / `server_port` | serveur propre à la passerelle (défaut : `server.host` / `udp_port`) |
 | `devices[].activation` | `otaa` (`app_key`, `join_eui`) ou `abp` (`dev_addr`, `nwk_s_key`, `app_s_key`) |
 | `devices[].interval` | période d'émission (s) |
-| `devices[].payload` | `sensor` (temp/humidité/batterie), `text` (`payload_text`, `{n}` = compteur) ou `hex` (`payload_hex`) |
+| `devices[].payload` | `sensor` (temp/humidité/batterie), `relay` (relais), `display` (afficheur), `text` (`payload_text`, `{n}` = compteur) ou `hex` (`payload_hex`) |
 | `devices[].confirmed` | uplinks confirmés |
 | `devices[].class` | `A` (défaut) ou `C` |
 | `devices[].rssi` | RSSI moyen (dBm), ou un dictionnaire `{nom_passerelle: rssi}` |
@@ -149,9 +151,44 @@ Les compteurs (DevNonce, FCnt) sont sauvegardés dans `config.state.json`.
 | 3-4 | batterie (mV) |
 | 5 | compteur |
 
-Le décodeur JavaScript est installé automatiquement dans le device profile : ChirpStack
+Le codec JavaScript est installé automatiquement dans le device profile : ChirpStack
 affiche directement `temperature`, `humidity`, `battery_mv`. Un downlink FPort 1 de 2 octets
-change l'intervalle d'émission (`encodeDownlink({interval: 20})` depuis l'interface fonctionne aussi).
+change l'intervalle d'émission de n'importe quel device (`{"interval": 20}` en JSON depuis
+l'interface fonctionne aussi).
+
+## Actionneurs : relais (FPort 3) et afficheur (FPort 4)
+
+Un actionneur reçoit ses commandes en downlink et **confirme aussitôt son nouvel état par un
+uplink**. Il est en général alimenté sur secteur (batterie « externe » dans `DevStatusAns`) et
+en classe C pour exécuter les commandes sans attendre. Le tableau de bord affiche un voyant
+pour le relais et un écran OLED 128×64 pour l'afficheur, avec des boutons qui passent par la
+file de downlinks ChirpStack (clé API nécessaire).
+
+**Relais** (`payload: relay`)
+
+| Sens | Octets | Contenu |
+|---|---|---|
+| downlink | 0 | `0` OFF, `1` ON, `2` basculer |
+| downlink | 1-2 (facultatif) | durée en s : retour à l'état précédent ensuite |
+| uplink | 0 | état (0/1) |
+| uplink | 1-2 | nombre de commutations |
+| uplink | 3 | origine : 0 démarrage, 1 commande réseau, 2 bouton local, 3 fin de temporisation |
+
+JSON à saisir dans ChirpStack (*Queue*, FPort 3) : `{"relay": 1}`, `{"relay": 0}`,
+`{"relay": "toggle", "duration": 30}`. Le bouton *Bouton local* du tableau de bord simule un
+appui sur le bouton physique : l'état change et remonte au serveur.
+
+**Afficheur** (`payload: display`, modèle : carte Heltec avec écran OLED 128×64)
+
+| Sens | Octets | Contenu |
+|---|---|---|
+| downlink | 0-50 | texte UTF-8, `\n` = nouvelle ligne, vide = effacer l'écran |
+| uplink | 0-1 | nombre de messages reçus |
+| uplink | 2 | longueur du dernier message (octets) |
+
+JSON (*Queue*, FPort 4) : `{"text": "Salle B12\n21 °C"}`. L'écran affiche 5 lignes de
+21 caractères (les lignes trop longues sont coupées). Le texte est limité à **51 octets** :
+c'est la taille maximale d'un downlink à SF12, utilisé en RX2 et donc par la classe C.
 
 ## Organisation du code
 

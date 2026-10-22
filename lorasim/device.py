@@ -29,6 +29,7 @@ class Device:
         self.state = state
         self.st = state.device(self.dev_eui_hex)
         self.payload = payloads.make(cfg, self.dev_eui_hex)
+        self.payload.notify = self.report  # actionneur : changement d'état à confirmer
 
         self.data_rate = int(cfg.get("data_rate", 5))
         self.tx_power = 0  # index TXPower (0 = puissance max)
@@ -70,6 +71,8 @@ class Device:
         log(self.name, msg, level, kind="dev")
 
     def battery_level(self) -> int:
+        if getattr(self.payload, "external_power", False):
+            return 0  # DevStatusAns : alimentation externe
         mv = getattr(self.payload, "battery_mv", 3300)
         return max(1, min(254, int((mv - 2800) / 800 * 253) + 1))
 
@@ -125,6 +128,18 @@ class Device:
             self._resume.set()
             self.log("allumé")
 
+    def report(self, msg: str):
+        """L'état de l'actionneur a changé : on l'annonce par un uplink immédiat."""
+        self.log(msg, "ok")
+        if self.dev_addr is not None and not self.paused:
+            self.wake.set()
+
+    def press_button(self) -> bool:
+        if not hasattr(self.payload, "press"):
+            return False
+        self.report(self.payload.press())
+        return True
+
     def set_interval(self, seconds: float):
         self.interval = max(5.0, float(seconds))
         self.log(f"intervalle d'émission changé à {self.interval:g} s", "ok")
@@ -134,6 +149,7 @@ class Device:
         datr = EU868_DATR.get(self.data_rate, "?")
         return {
             "name": self.name, "dev_eui": self.dev_eui_hex, "activation": self.activation,
+            "payload": self.cfg.get("payload", "sensor"),
             "class": self.device_class, "status": "pause" if self.paused else self.status,
             "dev_addr": f"{self.dev_addr:08x}" if self.dev_addr is not None else None,
             "fcnt_up": self.st["fcnt_up"], "fcnt_down": max(self.st["fcnt_down"], 0),
@@ -307,18 +323,29 @@ class Device:
             parts.append("MAC[" + ", ".join(f"{mac.name(c)}({p.hex()})" if p else mac.name(c)
                                             for c, p in cmds) + "]")
             self.pending_mac += mac.handle(self, cmds)
-        if dd.fport not in (None, 0):
+        app = dd.fport not in (None, 0)
+        if app:
             parts.append(f"FPort={dd.fport} data={dd.payload.hex()}")
-            self.last_down_info = f"FPort {dd.fport} : {dd.payload.hex()}"
-            self._handle_app_downlink(dd.fport, dd.payload)
+            self.last_down_info = f"FPort {dd.fport} : {dd.payload.hex() or '(vide)'}"
         self.log(" ".join(parts), "down")
+        if app:
+            self._handle_app_downlink(dd.fport, dd.payload)
         # Le serveur attend une réponse (ACK ou trames en attente) : uplink anticipé
         if dd.fpending or dd.confirmed:
             self.wake.set()
 
     def _handle_app_downlink(self, fport: int, data: bytes):
-        """FPort 1, 2 octets : nouvel intervalle d'émission (secondes)."""
+        """FPort 1, 2 octets : nouvel intervalle d'émission (secondes) ; sinon commande d'actionneur."""
         if fport == 1 and len(data) == 2:
             new = int.from_bytes(data, "big")
             if new >= 5:
                 self.set_interval(new)
+            return
+        handler = getattr(self.payload, "on_downlink", None)
+        if handler is None:
+            return
+        msg = handler(fport, data)
+        if msg:
+            self.report(msg)
+        else:
+            self.log(f"FPort {fport} : commande non reconnue ({data.hex() or 'vide'})", "warn")

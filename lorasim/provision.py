@@ -93,7 +93,7 @@ class ChirpStack:
             reg_params_revision=common.RegParamsRevision.A,
             adr_algorithm_id="default",
             payload_codec_runtime=api.CodecRuntime.JS,
-            payload_codec_script=payloads.SENSOR_CODEC_JS,
+            payload_codec_script=payloads.CODEC_JS,
             uplink_interval=3600, device_status_req_interval=1,
             supports_otaa=otaa,
             supports_class_c=class_c, class_c_timeout=5,

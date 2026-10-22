@@ -4,6 +4,7 @@
   python -m lorasim provision                               # enregistre tout dans ChirpStack
   python -m lorasim run                                     # lance la simulation
   python -m lorasim downlink sim-device-01 --interval 20     # envoie un downlink
+  python -m lorasim downlink sim-relais --relay on           # commande un relais / un afficheur
   python -m lorasim reset                                   # efface DevNonces / compteurs
 """
 
@@ -45,8 +46,8 @@ def cmd_init(args):
             "activation": "otaa",
             "class": "C",
             "app_key": secrets.token_hex(16),
-            "interval": 60,
-            "payload": "sensor",
+            "interval": 120,
+            "payload": "relay",
         })
     if args.abp:
         devices.append({
@@ -85,6 +86,7 @@ def cmd_init(args):
         "# server.api_port : port de l'API gRPC ChirpStack (le même que l'interface web, 8080 par défaut)\n"
         "# server.api_token: clé API à créer dans l'interface ChirpStack (menu « API keys »)\n"
         "# devices[].class : A (défaut) ou C (écoute permanente, downlinks immédiats)\n"
+        "# devices[].payload : sensor, relay (FPort 3), display (FPort 4), text ou hex\n"
         "# devices[].rssi  : RSSI moyen simulé (dBm), aléatoire si absent\n"
         "# gateways[].server_host / server_port : serveur propre à une passerelle\n"
         "#   (modifiable depuis le tableau de bord, défaut : server.host / udp_port)\n\n"
@@ -103,15 +105,23 @@ def cmd_provision(args):
 
 
 def cmd_downlink(args):
+    from . import payloads
     from .provision import ChirpStack, enqueue
     cfg = load_config(args.config)
     dev = next((d for d in cfg["devices"] if d["name"] == args.device), None)
     if dev is None:
         raise SystemExit(f"device inconnu : {args.device}")
-    if args.interval is not None:
-        fport, data = 1, args.interval.to_bytes(2, "big")
-    else:
-        fport, data = args.fport, bytes.fromhex(args.hex or "")
+    try:
+        if args.interval is not None:
+            fport, data = 1, args.interval.to_bytes(2, "big")
+        elif args.relay is not None:
+            fport, data = payloads.relay_command(args.relay, args.duration)
+        elif args.text is not None:
+            fport, data = payloads.display_command(args.text.replace("\\n", "\n"))
+        else:
+            fport, data = args.fport, bytes.fromhex(args.hex or "")
+    except ValueError as e:
+        raise SystemExit(f"erreur : {e}")
     import grpc
     try:
         qid = enqueue(ChirpStack(cfg["server"]), dev["dev_eui"], fport, data, args.confirmed)
@@ -205,6 +215,10 @@ def main(argv=None):
     g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--interval", type=int, help="nouvel intervalle d'émission (s), FPort 1")
     g.add_argument("--hex", help="données brutes en hexadécimal")
+    g.add_argument("--relay", choices=["on", "off", "toggle"], help="commande du relais (FPort 3)")
+    g.add_argument("--text", help="texte de l'afficheur, \\n = retour à la ligne (FPort 4)")
+    s.add_argument("--duration", type=int, default=0,
+                   help="avec --relay : retour à l'état précédent après N secondes")
     s.add_argument("--fport", type=int, default=10)
     s.add_argument("--confirmed", action="store_true")
     s.set_defaults(func=cmd_downlink)
