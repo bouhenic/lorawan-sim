@@ -363,6 +363,10 @@ class Device:
             return
         want_freq = int(group.get("frequency", MC_DEFAULT_FREQ))
         want_datr = EU868_DATR.get(int(group.get("dr", 0)))
+        if freq == 0:
+            self.log(f"multicast « {name} » émis sur 0 Hz : fréquence du groupe non renseignée dans "
+                     f"ChirpStack, non reçu (renseignez Frequency (Hz) = {want_freq})", "warn")
+            return
         if (freq, datr) != (want_freq, want_datr):
             self.log(f"multicast « {name} » émis sur {freq / 1e6:.3f} MHz {datr} mais le device écoute "
                      f"sur {want_freq / 1e6:.3f} MHz {want_datr} : non reçu", "warn")

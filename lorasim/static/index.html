@@ -550,7 +550,9 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
       <ol class="help">
         <li><i>Applications › votre application › onglet Multicast groups › Add multicast-group</i> : nom, McAddr,
           McNwkSKey, McAppSKey, <i>Group type</i> <code>Class-C</code>, DR et fréquence ci-dessus,
-          <i>Class-C scheduling type</i> <code>Delay</code>.</li>
+          <i>Class-C scheduling type</i> <code>Delay</code>. <b>Renseignez bien <i>Frequency (Hz)</i></b> :
+          ChirpStack ne propose pas de valeur par défaut, et un champ vide (0 Hz) fait émettre le groupe
+          sur une fréquence qu'aucun membre n'écoute.</li>
         <li>Onglet <i>Devices</i> de l'application : cochez les mêmes devices que ci-dessus, puis
           <i>Selected devices › Add to multicast-group</i>.</li>
         <li>Associer une passerelle au groupe est facultatif : sans passerelle, ChirpStack émet par celles

@@ -233,6 +233,8 @@ Add multicast-group*, *Group type* `Class-C`, *Class-C scheduling type* `Delay` 
 
 À savoir côté ChirpStack (vérifié avec la version 4.16) :
 
+- *Frequency (Hz)* est **obligatoire en pratique** : laissé vide, il vaut 0 et ChirpStack émet
+  quand même, sur 0 Hz ; aucun membre ne reçoit (le journal du simulateur l'indique) ;
 - la file d'un groupe n'accepte que des octets (*Data (HEX)*) : pas de JSON ni de codec ;
 - associer une passerelle au groupe est facultatif : sans passerelle, ChirpStack émet par celles
   qui entendent les membres (`provision` associe quand même les passerelles de la config) ;
