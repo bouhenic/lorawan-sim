@@ -12,11 +12,12 @@ RUN pip install -r requirements.txt
 COPY lorasim/ lorasim/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Utilisateur non-root ; config.yaml et config.state.json vivent dans /data (volume)
+# config.yaml et config.state.json vivent dans /data (volume). Le conteneur démarre en root
+# pour donner /data à l'utilisateur lorasim (dossier créé par root sous Linux), puis
+# l'entrypoint lance lorasim sous cet utilisateur non-root.
 RUN useradd --uid 1000 --create-home lorasim \
     && mkdir /data && chown lorasim:lorasim /data \
     && chmod +x /usr/local/bin/docker-entrypoint.sh
-USER lorasim
 VOLUME /data
 
 # Serveur LoRaWAN utilisé si /data/config.yaml n'existe pas encore
