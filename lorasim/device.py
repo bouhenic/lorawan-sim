@@ -1,11 +1,11 @@
-"""Device LoRaWAN 1.0.x simulé (OTAA ou ABP, classe A ou C, groupes multicast en classe C)."""
+"""Device LoRaWAN 1.0.x simulé (OTAA ou ABP, classe A ou C, groupes multicast, FUOTA)."""
 
 import asyncio
 import collections
 import random
 import time
 
-from . import mac, payloads, phy
+from . import fuota, mac, payloads, phy
 from .crypto import derive_session_keys
 from .log import log
 from .radio import EU868_DATR, EU868_DEFAULT_CHANNELS
@@ -56,6 +56,12 @@ class Device:
         self.last_down_info = ""
         self.last_reception = None   # (rssi, snr, nb passerelles) du dernier uplink
         self.rssi_history = collections.deque(maxlen=40)
+
+        # FUOTA : actif si le device a une GenAppKey (dérivation des clés multicast, TS005)
+        self.pending_app = []   # réponses applicatives à envoyer : (prêt à, FPort, octets)
+        self.mc_loss = float(cfg.get("mc_loss", 0))  # perte simulée des trames multicast (0 à 1)
+        self.firmware = self.st.get("firmware") or str(cfg.get("firmware", "1.0.0"))
+        self.fuota = fuota.Fuota(self, bytes.fromhex(cfg["gen_app_key"])) if cfg.get("gen_app_key") else None
 
         self.app_key = bytes.fromhex(cfg["app_key"]) if self.activation == "otaa" else None
         if self.activation == "abp":
@@ -145,7 +151,36 @@ class Device:
                 self.wake.set()
 
     def groups(self) -> list[dict]:
-        return [g for g in self.medium.groups if self.name in g.get("devices", [])]
+        groups = [g for g in self.medium.groups if self.name in g.get("devices", [])]
+        if self.fuota:
+            groups += self.fuota.groups.values()  # groupes créés à distance (TS005)
+        return groups
+
+    def _wake_if_active(self):
+        if self.dev_addr is not None and not self.paused:
+            self.wake.set()
+
+    def queue_app_uplink(self, fport: int, payload: bytes, delay: float = 0):
+        """Réponse applicative (FUOTA) : envoyée seule dans un uplink, au plus tôt après delay."""
+        self.pending_app.append((time.time() + delay, fport, payload))
+        asyncio.get_running_loop().call_later(delay + random.uniform(0.5, 1.5), self._wake_if_active)
+
+    def _next_app_uplink(self):
+        now = time.time()
+        for i, (ready, fport, payload) in enumerate(self.pending_app):
+            if ready <= now:
+                del self.pending_app[i]
+                return fport, payload
+        return None
+
+    def set_firmware(self, version: str):
+        self.firmware = version
+        self.st["firmware"] = version
+        self.state.save()
+
+    def set_mc_loss(self, ratio: float):
+        self.mc_loss = min(1.0, max(0.0, float(ratio)))
+        self.log(f"perte simulée des trames multicast : {self.mc_loss:.0%}", "ok")
 
     def press_button(self) -> bool:
         if not hasattr(self.payload, "press"):
@@ -178,6 +213,8 @@ class Device:
             "rssi_history": list(self.rssi_history),
             "values": getattr(self.payload, "last", {}),
             "credentials": self.credentials(),
+            "firmware": self.firmware, "mc_loss": self.mc_loss,
+            "fuota": self.fuota.snapshot() if self.fuota else None,
         }
 
     def credentials(self) -> list[tuple[str, str]]:
@@ -191,6 +228,8 @@ class Device:
         else:
             creds += [("DevAddr", f"{self.dev_addr:08x}"), ("NwkSKey", self.nwk_s_key.hex()),
                       ("AppSKey", self.app_s_key.hex())]
+        if self.fuota:
+            creds.append(("GenAppKey (FUOTA)", self.fuota.gen_app_key.hex()))
         return creds
 
     # --- cycle de vie ------------------------------------------------------
@@ -199,6 +238,8 @@ class Device:
         await asyncio.sleep(random.uniform(0.5, 5))  # étale les démarrages
         if self.activation == "abp":
             self.log(f"ABP classe {self.device_class}, DevAddr {self.dev_addr:08x}, FCnt {self.st['fcnt_up']}")
+            if self.fuota:
+                self.fuota.request_time()
         while True:
             if self.paused:
                 await self._resume.wait()
@@ -249,13 +290,18 @@ class Device:
         if self.dev_addr is None:
             return
         fcnt = self.st["fcnt_up"]
-        data = self.payload.next()
-        fopts, fport, body = b"", self.payload.fport, data
-        if self.pending_mac:
-            if len(self.pending_mac) <= 15:
-                fopts = self.pending_mac
-            else:  # trop long pour FOpts : envoi seul sur FPort 0
-                fport, body = 0, self.pending_mac
+        fopts = b""
+        if len(self.pending_mac) > 15:  # trop long pour FOpts : envoi seul sur FPort 0
+            fport, body = 0, self.pending_mac
+        else:
+            fopts = self.pending_mac
+            app = self._next_app_uplink()
+            if app:
+                fport, body = app
+            else:
+                fport, body = self.payload.fport, self.payload.next()
+        if self.pending_app:  # d'autres réponses attendent : uplink suivant rapproché
+            asyncio.get_running_loop().call_later(random.uniform(1, 2), self._wake_if_active)
         frame = phy.build_data_up(
             self.nwk_s_key, self.app_s_key, self.dev_addr, fcnt, fport, body,
             confirmed=self.confirmed, ack=self.pending_ack, fopts=fopts,
@@ -270,6 +316,8 @@ class Device:
         if self.confirmed:
             self._ack_future = asyncio.get_running_loop().create_future()
         extra = (" +ACK" if ack else "") + (f" +MAC {fopts.hex()}" if fopts else "")
+        if fport in fuota.PORTS:
+            extra += " (FUOTA)"
         kind = "confirmé" if self.confirmed else "non confirmé"
         self.log(f"Uplink {kind} FCnt={fcnt} FPort={fport} {body.hex()}{extra}")
         self._transmit(frame)
@@ -315,6 +363,8 @@ class Device:
         self.log(f"JOIN OK : DevAddr {self.dev_addr:08x}, NetID {net_id}, "
                  f"{len(self.channels)} canaux, classe {self.device_class}", "ok")
         self._join_future.set_result(True)
+        if self.fuota:
+            self.fuota.request_time()  # TS003 : synchronise l'horloge pour les sessions multicast
 
     def _handle_data_down(self, frame: bytes, gateway):
         dd = phy.parse_data_down(self.nwk_s_key, self.app_s_key, frame, self.st["fcnt_down"])
@@ -358,11 +408,15 @@ class Device:
         name = group["name"]
         if self.paused or self.dev_addr is None:
             return  # éteint, ou pas encore joint : n'écoute pas
-        if self.device_class != "C":
+        if group.get("fuota"):
+            if not self.fuota.listening(group):
+                self.log(f"multicast « {name} » non reçu : hors de la session multicast programmée", "warn")
+                return
+        elif self.device_class != "C":
             self.log(f"multicast « {name} » non reçu : seul un device de classe C écoute en permanence", "warn")
             return
-        want_freq = int(group.get("frequency", MC_DEFAULT_FREQ))
-        want_datr = EU868_DATR.get(int(group.get("dr", 0)))
+        want_freq = int(group.get("frequency") or MC_DEFAULT_FREQ)
+        want_datr = EU868_DATR.get(int(group.get("dr") or 0))
         if freq == 0:
             self.log(f"multicast « {name} » émis sur 0 Hz : fréquence du groupe non renseignée dans "
                      f"ChirpStack, non reçu (renseignez Frequency (Hz) = {want_freq})", "warn")
@@ -370,6 +424,9 @@ class Device:
         if (freq, datr) != (want_freq, want_datr):
             self.log(f"multicast « {name} » émis sur {freq / 1e6:.3f} MHz {datr} mais le device écoute "
                      f"sur {want_freq / 1e6:.3f} MHz {want_datr} : non reçu", "warn")
+            return
+        if self.mc_loss and random.random() < self.mc_loss:
+            self.log(f"multicast « {name} » perdu (perte simulée {self.mc_loss:.0%})", "warn")
             return
         counters = self.st["mc_fcnt"]
         last = counters.get(name, -1)
@@ -383,6 +440,9 @@ class Device:
                 self.log(f"multicast « {name} » : FCnt {dd.fcnt} déjà dépassé (dernier {last}), "
                          "trame ignorée (groupe recréé dans ChirpStack ?)", "warn")
             return
+        if dd.fcnt > group.get("fcnt_max", 0xFFFFFFFF):
+            self.log(f"multicast « {name} » : FCnt {dd.fcnt} au-delà du maximum autorisé, trame ignorée", "warn")
+            return
         if dd.confirmed or not dd.fport:
             self.log(f"multicast « {name} » : trame non conforme (confirmée ou FPort 0), ignorée", "warn")
             return
@@ -391,12 +451,20 @@ class Device:
         self.downlinks += 1
         self.last_down = time.time()
         self.last_down_info = f"multicast « {name} », FPort {dd.fport} : {dd.payload.hex() or '(vide)'}"
+        shown = dd.payload.hex() if len(dd.payload) <= 16 else f"{dd.payload[:16].hex()}… ({len(dd.payload)} o)"
         self.log(f"Downlink multicast « {name} » FCnt={dd.fcnt} via {gateway.name} "
-                 f"FPort={dd.fport} data={dd.payload.hex()}", "down")
-        self._handle_app_downlink(dd.fport, dd.payload, spread=MC_REPLY_SPREAD)
+                 f"FPort={dd.fport} data={shown}", "down")
+        self._handle_app_downlink(dd.fport, dd.payload, spread=MC_REPLY_SPREAD, multicast=True)
 
-    def _handle_app_downlink(self, fport: int, data: bytes, spread: float = 0):
-        """FPort 1, 2 octets : nouvel intervalle d'émission (secondes) ; sinon commande d'actionneur."""
+    def _handle_app_downlink(self, fport: int, data: bytes, spread: float = 0, multicast: bool = False):
+        """FPort 1, 2 octets : nouvel intervalle d'émission (secondes) ; FPorts 200 à 202 : FUOTA ;
+        sinon commande d'actionneur."""
+        if fport in fuota.PORTS:
+            if self.fuota:
+                self.fuota.handle(fport, data, multicast)
+            else:
+                self.log(f"FPort {fport} : commande FUOTA ignorée, pas de GenAppKey pour ce device", "warn")
+            return
         if fport == 1 and len(data) == 2:
             new = int.from_bytes(data, "big")
             if new >= 5:

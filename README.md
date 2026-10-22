@@ -23,6 +23,8 @@ Simule une (ou plusieurs) passerelle(s) LoRaWAN et des devices classe A ou C
   downlinks immédiatement (RX2, 869,525 MHz) sans attendre d'uplink.
 - **Actionneurs** : relais et afficheur OLED commandés par downlink (voir plus bas).
 - **Multicast** : groupes de devices de classe C commandés par un seul downlink (voir plus bas).
+- **FUOTA** : mise à jour de firmware par radio, pilotée par un déploiement FUOTA ChirpStack
+  (TS003, TS004, TS005 v1.0.0, voir plus bas).
 - **Tableau de bord web temps réel** (http://localhost:8000) : état des passerelles,
   carte par device (DevAddr, FCnt, DR/SF, TXPower, RSSI/SNR + historique, mesures),
   journal en direct filtrable, et actions : uplink immédiat, rejoin, pause, intervalle,
@@ -141,10 +143,14 @@ Si le tableau de bord est ouvert sur le réseau (`--web-host 0.0.0.0`), les clé
 | `devices[].class` | `A` (défaut) ou `C` |
 | `devices[].rssi` | RSSI moyen (dBm), ou un dictionnaire `{nom_passerelle: rssi}` |
 | `devices[].data_rate` | DR initial (0 = SF12 … 5 = SF7) |
+| `devices[].gen_app_key` | clé FUOTA (*Gen App Key* dans ChirpStack) ; sans elle, pas de FUOTA |
+| `devices[].mc_loss` | perte simulée des trames multicast, fragments FUOTA compris (0 à 1) |
+| `devices[].firmware` | version de firmware de départ (défaut `1.0.0`) |
 | `multicast_groups[]` | `name`, `mc_addr`, `mc_nwk_s_key`, `mc_app_s_key`, `dr`, `frequency` (Hz), `devices` (noms des membres) |
 
 Les EUI et clés doivent être **entre guillemets** si elles ne contiennent que des chiffres.
-Les compteurs (DevNonce, FCnt, FCnt multicast) sont sauvegardés dans `config.state.json`.
+Les compteurs (DevNonce, FCnt, FCnt multicast) et la version de firmware installée sont
+sauvegardés dans `config.state.json`.
 
 ## Payload `sensor` (FPort 2)
 
@@ -240,6 +246,60 @@ Add multicast-group*, *Group type* `Class-C`, *Class-C scheduling type* `Delay` 
   qui entendent les membres (`provision` associe quand même les passerelles de la config) ;
 - un groupe créé à la main est retrouvé par son McAddr, quelle que soit l'application.
 
+## FUOTA (mise à jour de firmware par radio)
+
+Le FUOTA réutilise le multicast, mais **c'est le serveur qui configure tout à distance**, avec trois
+spécifications de la LoRa Alliance (implémentées en version 1.0.0 côté device) :
+
+| Spécification | FPort | Rôle |
+|---|---|---|
+| TS005 Remote Multicast Setup | 200 | crée le groupe dans le device (McAddr, clé chiffrée avec une clé dérivée de la **GenAppKey**) et programme une session de classe C |
+| TS004 Fragmented Data Block Transport | 201 | annonce le fichier (nombre et taille des fragments), transporte les fragments, renvoie l'état de la réception |
+| TS003 Clock Synchronization | 202 | synchronise l'horloge du device (heure GPS) pour l'heure de début de session |
+
+Déroulement d'un déploiement ChirpStack, tel qu'on le voit dans le journal et sur la carte du device :
+
+1. au join, le device demande l'heure (`AppTimeReq`) et applique la correction reçue ;
+2. `McGroupSetupReq` : le device dérive les clés du groupe de sa GenAppKey (aucune clé saisie) ;
+3. `FragSessionSetupReq` : taille du fichier, nombre et taille des fragments ;
+4. `McClassCSessionReq` : session multicast programmée (heure GPS, durée, fréquence, DR). Un device
+   de **classe A passe temporairement en classe C** pendant la session, puis y revient ;
+5. les fragments arrivent en multicast, suivis des **fragments de redondance** (XOR de plusieurs
+   fragments) : un device qui a perdu des fragments reconstitue quand même le fichier tant
+   qu'il a reçu assez de fragments utiles (élimination de Gauss) ;
+6. `FragSessionStatusReq` : le device indique le nombre de fragments reçus et manquants ;
+   ChirpStack marque le device comme réussi ou en erreur ;
+7. fichier complet : empreinte SHA-256, « redémarrage » simulé et nouvelle version de firmware
+   (lue dans un en-tête `LORASIM-FW x.y.z` en début de fichier, sinon début du SHA-256).
+
+Chaque réponse du device part dans un uplink séparé (ChirpStack attend une commande par trame).
+
+**Préparer ChirpStack** (`provision` fait les deux premiers points) :
+
+- device profile, onglet *Application layer* : TS005, TS004 et TS003 en `v1.0.0`, FPorts
+  `200`, `201`, `202`. Onglet *General* : *Uplink interval* court (`provision` met 60 s), car
+  ChirpStack attend cette durée entre deux étapes et programme la session (tentatives + 1) ×
+  uplink interval plus tard ;
+- device, onglet *OTAA keys* : *Gen App Key (for Remote Multicast Setup)* = `gen_app_key` ;
+- application, onglet *FUOTA* › *New FUOTA deployment* : même device profile, *Multicast group-type*
+  `Class-C`, *Multicast frequency (Hz)* `869525000` (obligatoire), *Multicast data-rate* `0`,
+  *Fragmentation redundancy (%)* (par ex. 50), *Fragmentation status request* `After session
+  timeout`, *Payload* = le fichier ;
+- onglet *Devices* de l'application : cocher les devices, *Selected devices › Add to FUOTA
+  deployment*, puis *Start deployment* dans le déploiement (onglet des jobs pour suivre les étapes).
+
+Fichier de démonstration :
+
+```bash
+{ printf 'LORASIM-FW 1.1.0\n'; head -c 400 /dev/urandom; } > firmware-v1.1.bin
+```
+
+Le champ **Perte multicast** de la carte d'un device (`mc_loss`) fait perdre une partie des
+fragments : avec 50 % de redondance, la reconstitution réussit presque toujours à 10 % de pertes
+et environ une fois sur deux à 30 %. Ordre de grandeur de durée : ChirpStack espace les trames
+multicast d'au moins 5 s (`multicast_class_c_margin`), soit environ 2 min pour 15 fragments à
+SF12, plus une minute par étape unicast.
+
 ## Organisation du code
 
 | Fichier | Contenu |
@@ -248,6 +308,7 @@ Add multicast-group*, *Group type* `Class-C`, *Class-C scheduling type* `Delay` 
 | `lorasim/phy.py` | construction / décodage des trames (Join Request/Accept, data up/down) |
 | `lorasim/mac.py` | commandes MAC et réponses |
 | `lorasim/device.py` | machine à états d'un device (classes A et C, réception multicast) |
+| `lorasim/fuota.py` | FUOTA côté device : TS003, TS004 (décodage des fragments de redondance), TS005 |
 | `lorasim/gateway.py` | Semtech UDP Packet Forwarder |
 | `lorasim/radio.py` | canal radio simulé (RSSI, SNR, sensibilité par SF, pertes) |
 | `lorasim/payloads.py` | capteur, relais, afficheur et codec JavaScript |
@@ -258,6 +319,8 @@ Add multicast-group*, *Group type* `Class-C`, *Class-C scheduling type* `Delay` 
 
 ## Limites
 
-- Région EU868 uniquement, LoRaWAN 1.0.3, classes A et C (pas de classe B).
+- Région EU868 uniquement, LoRaWAN 1.0.3, classes A et C (pas de classe B, donc pas de
+  session FUOTA de classe B).
+- FUOTA : spécifications v1.0.0 uniquement (pas de v2.0.0) ; ABP non provisionné pour le FUOTA.
 - Les fenêtres RX ne sont pas vérifiées côté device : un downlink est accepté dès que la
   passerelle l'« émet » (à l'instant `tmst` demandé par le serveur).

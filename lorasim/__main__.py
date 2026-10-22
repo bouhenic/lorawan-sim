@@ -34,6 +34,7 @@ def cmd_init(args):
             "join_eui": "0000000000000000",
             "activation": "otaa",
             "app_key": secrets.token_hex(16),
+            "gen_app_key": secrets.token_hex(16),
             "interval": 30,
             "payload": "sensor",
             "confirmed": False,
@@ -47,6 +48,7 @@ def cmd_init(args):
             "activation": "otaa",
             "class": "C",
             "app_key": secrets.token_hex(16),
+            "gen_app_key": secrets.token_hex(16),
             "interval": 120,
             "payload": "relay",
         })
@@ -75,6 +77,7 @@ def cmd_init(args):
                 "activation": "otaa",
                 "class": "C",
                 "app_key": secrets.token_hex(16),
+                "gen_app_key": secrets.token_hex(16),
                 "interval": 120,
                 "payload": "relay",
             })
@@ -104,6 +107,7 @@ def cmd_init(args):
         "# server.api_port : port de l'API gRPC ChirpStack (le même que l'interface web, 8080 par défaut)\n"
         "# server.api_token: clé API à créer dans l'interface ChirpStack (menu « API keys »)\n"
         "# devices[].class : A (défaut) ou C (écoute permanente, downlinks immédiats)\n"
+        "# devices[].gen_app_key : clé FUOTA (Gen App Key dans ChirpStack) ; mc_loss : perte multicast (0 à 1)\n"
         "# devices[].payload : sensor, relay (FPort 3), display (FPort 4), text ou hex\n"
         "# devices[].rssi  : RSSI moyen simulé (dBm), aléatoire si absent\n"
         "# gateways[].server_host / server_port : serveur propre à une passerelle\n"

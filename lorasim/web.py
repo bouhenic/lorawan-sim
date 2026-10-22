@@ -10,6 +10,7 @@
   POST /api/devices/{name}/{action}
        uplink | rejoin | pause | resume | interval {seconds} | downlink {hex, fport, confirmed}
        button (bouton local du relais) | command {relay: on|off|toggle, duration} ou {text}
+       mc_loss {percent} (perte simulée des trames multicast, FUOTA)
   POST /api/groups                crée un groupe multicast {name, mc_addr, mc_nwk_s_key, mc_app_s_key, dr, frequency}
   DELETE /api/groups/{name}       supprime un groupe
   POST /api/groups/{name}/members {device, member} : ajoute / retire un device
@@ -156,6 +157,9 @@ class Dashboard:
         if activation == "otaa":
             dcfg["join_eui"] = _hex_field(body, "join_eui", "JoinEUI", 8, "0000000000000000")
             dcfg["app_key"] = _hex_field(body, "app_key", "AppKey", 16)
+            gen_app_key = _hex_field(body, "gen_app_key", "GenAppKey", 16, "")
+            if gen_app_key:  # facultative : sans elle, pas de FUOTA
+                dcfg["gen_app_key"] = gen_app_key
         elif activation == "abp":
             dcfg["dev_addr"] = _hex_field(body, "dev_addr", "DevAddr", 4)
             dcfg["nwk_s_key"] = _hex_field(body, "nwk_s_key", "NwkSKey", 16)
@@ -252,6 +256,20 @@ class Dashboard:
             except ValueError as e:
                 return web.json_response({"ok": False, "error": str(e)}, status=400)
             return await self._downlink(dev, fport, data, False)
+        elif action == "mc_loss":
+            try:
+                percent = float(body.get("percent", 0))
+            except (TypeError, ValueError):
+                return web.json_response({"ok": False, "error": "pourcentage invalide"}, status=400)
+            if not 0 <= percent <= 100:
+                return web.json_response({"ok": False, "error": "pourcentage : 0 à 100"}, status=400)
+            dev.set_mc_loss(percent / 100)
+            dcfg = next(d for d in self.cfg["devices"] if d["name"] == dev.name)
+            if percent:
+                dcfg["mc_loss"] = percent / 100
+            else:
+                dcfg.pop("mc_loss", None)
+            self._save()
         elif action == "button":
             if not dev.press_button():
                 return web.json_response({"ok": False, "error": "ce device n'a pas de bouton"}, status=400)

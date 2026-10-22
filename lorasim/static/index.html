@@ -272,6 +272,16 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
 .mcform input[name=fport] { width: 64px; }
 .mcform .k { font-size: 12px; color: var(--text-3); min-width: 64px; }
 #newgroup { margin-bottom: 12px; border-color: var(--accent); }
+
+/* FUOTA */
+.fu-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.fu-head .k { font-size: 12px; color: var(--text-3); }
+.fu-head b { font-size: 16px; }
+.bar { height: 8px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border); margin: 8px 0 4px; overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.bar.done span { background: var(--good); }
+.bar[hidden] { display: none; }
+.fuota .sub + .sub { margin-top: 2px; }
 #newgroup[hidden] { display: none; }
 #newgroup h3 { margin: 0; font-size: 15px; }
 @media (max-width: 560px) { .form { grid-template-columns: minmax(0, 1fr); } }
@@ -351,6 +361,8 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
             <span class="keyrow"><input name="join_eui" class="mono" value="0000000000000000"></span></label>
           <label class="field otaa">AppKey (16 octets)
             <span class="keyrow"><input name="app_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
+          <label class="field otaa full">GenAppKey (16 octets, FUOTA : « Gen App Key » dans ChirpStack)
+            <span class="keyrow"><input name="gen_app_key" class="mono" data-size="16"><button type="button" class="regen" title="Générer">↻</button></span></label>
           <label class="field abp" hidden>DevAddr (4 octets)
             <span class="keyrow"><input name="dev_addr" class="mono" data-size="4" data-prefix="01"><button type="button" class="regen" title="Générer">↻</button></span></label>
           <label class="field abp" hidden>NwkSKey (16 octets)
@@ -560,6 +572,42 @@ button.danger.armed { background: var(--bad); color: #fff; border-color: transpa
       </ol>
     </details>
     <div class="actions"><button class="danger" data-del>Supprimer le groupe</button></div>
+  </div>
+</template>
+
+<template id="tpl-fuota">
+  <div class="ctrl fuota">
+    <div class="fu-head">
+      <span class="k">Firmware</span><b data-f="fw"></b>
+      <span class="badge" data-f="fu_badge"></span>
+    </div>
+    <div class="sub" data-f="stage"></div>
+    <div class="bar" role="progressbar" aria-label="Fragments utiles reçus"><span></span></div>
+    <div class="sub" data-f="frag"></div>
+    <div class="sub" data-f="session"></div>
+    <form class="mcform">
+      <span class="k">Perte multicast</span>
+      <input name="percent" type="number" min="0" max="100" step="5" aria-label="Perte multicast (%)" style="width: 72px">
+      <span class="sub">%</span>
+      <button type="submit">Appliquer</button>
+    </form>
+    <details class="box">
+      <summary>Lancer une mise à jour (FUOTA) depuis ChirpStack</summary>
+      <ol class="help">
+        <li>Device profile › onglet <i>Application layer</i> : TS005, TS004 et TS003 en version
+          <code>v1.0.0</code>, FPorts <code>200</code>, <code>201</code>, <code>202</code> (fait par
+          <code>provision</code>). Onglet <i>General</i> : <i>Uplink interval</i> court (60 s) : c'est la durée
+          de chaque étape du déploiement.</li>
+        <li>Device › <i>OTAA keys</i> : <i>Gen App Key (for Remote Multicast Setup)</i> = GenAppKey.</li>
+        <li>Application › onglet <i>FUOTA</i> › <i>New FUOTA deployment</i> : même device profile,
+          <i>Multicast frequency (Hz)</i> <code>869525000</code> (obligatoire), DR <code>0</code>, redondance
+          (ex. 50 %), <i>Payload</i> : le fichier à envoyer. Pour afficher un numéro de version, faites-le
+          commencer par <code>LORASIM-FW 1.1.0</code> suivi d'un retour à la ligne.</li>
+        <li>Onglet <i>Devices</i> de l'application : cochez les devices, <i>Selected devices › Add to FUOTA
+          deployment</i>, puis <i>Start deployment</i>. Suivez les étapes ici et dans l'onglet des jobs du
+          déploiement.</li>
+      </ol>
+    </details>
   </div>
 </template>
 
@@ -783,6 +831,7 @@ function makeDevice(d) {
     `<li>${t.replace("{C}", d.class === "C" ? ", « Supports Class-C » coché" : "")}</li>`).join("");
   if (openCreds.has(d.name) || (d.status === "pause" && d.uplinks === 0)) $(".creds-box", card).open = true;
   if (d.payload === "relay" || d.payload === "display") makeControls(card, d);
+  if (d.fuota) makeFuota(card, d);
   const form = $(".dlform", card), msg = $(".dlmsg", card);
   form.onsubmit = async e => {
     e.preventDefault();
@@ -873,6 +922,47 @@ function updateControls(card, d) {
   }
 }
 
+// --- FUOTA -----------------------------------------------------------------------
+function makeFuota(card, d) {
+  const box = $("#tpl-fuota").content.firstElementChild.cloneNode(true);
+  const form = $("form", box);
+  form.elements.percent.value = Math.round((d.mc_loss || 0) * 100);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    await post(d.name, "mc_loss", { percent: +form.elements.percent.value || 0 });
+    refresh();
+  };
+  card.querySelector(".lastdown").before(box);
+}
+function updateFuota(card, d) {
+  const fu = d.fuota;
+  if (!fu) return;
+  f(card, "fw").textContent = d.firmware;
+  const badge = f(card, "fu_badge");
+  const s = fu.session, now = Date.now() / 1000 - clientOffset;
+  if (s && s.open) { badge.textContent = "session multicast en cours"; badge.className = "badge c"; }
+  else if (s && now < s.start) { badge.textContent = "session programmée"; badge.className = "badge"; }
+  else { badge.textContent = fu.groups ? `${fu.groups} groupe(s) FUOTA` : "prêt pour le FUOTA"; badge.className = "badge"; }
+  f(card, "stage").textContent = fu.stage;
+  const bar = $(".bar", card), fr = fu.frag;
+  bar.hidden = !fr;
+  if (fr) {
+    bar.firstElementChild.style.width = `${Math.round(100 * fr.useful / fr.nb_frag)}%`;
+    bar.classList.toggle("done", fr.done);
+    f(card, "frag").textContent = `${fr.useful} / ${fr.nb_frag} fragments utiles · ${fr.received} reçus`
+      + ` (dont ${fr.coded} de redondance) · au moins ${fr.lost} perdus` + (fr.done ? " · fichier reconstitué ✓" : "");
+  } else f(card, "frag").textContent = "";
+  let sess = "";
+  if (s) {
+    const where = `${(s.frequency / 1e6).toFixed(3)} MHz DR${s.dr}`;
+    if (now < s.start) sess = `Session de classe C dans ${Math.round(s.start - now)} s (${where}, ${Math.round(s.end - s.start)} s)`;
+    else if (now <= s.end) sess = `Écoute en classe C sur ${where} : encore ${Math.round(s.end - now)} s`;
+    else sess = `Session terminée (${where})`;
+  }
+  if (fu.result) sess += (sess ? " · " : "") + `dernier fichier : ${fu.result.size} octets, SHA-256 ${fu.result.sha256.slice(0, 12)}…`;
+  f(card, "session").textContent = sess;
+}
+
 function updateDevice(card, d) {
   f(card, "name").textContent = d.name;
   const cls = f(card, "class");
@@ -931,6 +1021,7 @@ function updateDevice(card, d) {
   sub.disabled = !apiEnabled;
   sub.title = apiEnabled ? "" : "Renseignez server.api_token dans la configuration";
   updateControls(card, d);
+  updateFuota(card, d);
   const key = d.rssi_history.join(",");
   if (card.dataset.spark !== key) { card.dataset.spark = key; drawSpark(card, d.rssi_history); }
 }

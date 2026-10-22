@@ -3,11 +3,15 @@
 import grpc
 from chirpstack_api import api, common
 
-from . import payloads
+from . import fuota, payloads
 from .log import log
 
 APP_NAME = "Simulateur LoRaWAN"
 PROFILE_PREFIX = "Simulateur LoRaWAN"
+# Un déploiement FUOTA attend « uplink interval » secondes entre deux étapes unicast, et démarre
+# la session multicast (tentatives + 1) × uplink interval plus tard : une valeur courte garde
+# les démonstrations rapides (les devices doivent émettre au moins aussi souvent en classe A).
+UPLINK_INTERVAL = 60
 
 
 def profile_name(otaa: bool, class_c: bool) -> str:
@@ -96,9 +100,15 @@ class ChirpStack:
             adr_algorithm_id="default",
             payload_codec_runtime=api.CodecRuntime.JS,
             payload_codec_script=payloads.CODEC_JS,
-            uplink_interval=3600, device_status_req_interval=1,
+            uplink_interval=UPLINK_INTERVAL, device_status_req_interval=1,
             supports_otaa=otaa,
             supports_class_c=class_c, class_c_timeout=5,
+            # FUOTA : couches applicatives LoRa Alliance v1.0.0 sur leurs FPorts habituels
+            app_layer_params=api.AppLayerParams(
+                ts003_version=api.Ts003Version.TS003_V100, ts003_f_port=fuota.CLOCK_PORT,
+                ts004_version=api.Ts004Version.TS004_V100, ts004_f_port=fuota.FRAG_PORT,
+                ts005_version=api.Ts005Version.TS005_V100, ts005_f_port=fuota.MCSETUP_PORT,
+            ),
         )
         if not otaa:
             dp.abp_rx1_delay = 1
@@ -145,7 +155,8 @@ class ChirpStack:
 
         if is_otaa(dev):
             # LoRaWAN 1.0.x : ChirpStack attend l'AppKey dans le champ nwk_key
-            keys = api.DeviceKeys(dev_eui=eui, nwk_key=dev["app_key"], app_key=dev["app_key"])
+            keys = api.DeviceKeys(dev_eui=eui, nwk_key=dev["app_key"], app_key=dev["app_key"],
+                                  gen_app_key=dev.get("gen_app_key", ""))
             if self.exists(self.devices.GetKeys, api.GetDeviceKeysRequest(dev_eui=eui)):
                 self.call(self.devices.UpdateKeys, api.UpdateDeviceKeysRequest(device_keys=keys))
             else:
