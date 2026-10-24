@@ -248,6 +248,8 @@ Add multicast-group*, *Group type* `Class-C`, *Class-C scheduling type* `Delay` 
 
 ## FUOTA (mise à jour de firmware par radio)
 
+**Tutoriel pas à pas, de l'installation au déploiement : [docs/tutoriel-fuota.md](docs/tutoriel-fuota.md).**
+
 Le FUOTA réutilise le multicast, mais **c'est le serveur qui configure tout à distance**, avec trois
 spécifications de la LoRa Alliance (implémentées en version 1.0.0 côté device) :
 
