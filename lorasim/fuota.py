@@ -178,7 +178,7 @@ class Fuota:
                 "mc_app_s_key": app.hex(), "fuota": True, "fcnt_max": fmax,
                 "dr": None, "frequency": None, "start": None, "end": None,
             }
-            self.dev.st["mc_fcnt"][name] = fmin - 1
+            self.dev.st["mc_fcnt"][f"{mc_addr:08x}"] = fmin - 1
             self.dev.state.save()
             self.set_stage(f"groupe multicast {gid} configuré à distance (McAddr {mc_addr:08x}, "
                            "clés dérivées de la GenAppKey)", "ok")

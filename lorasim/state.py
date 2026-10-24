@@ -7,6 +7,7 @@ donc s'en souvenir d'une exécution à l'autre.
 import json
 import os
 import random
+import re
 
 
 class State:
@@ -23,7 +24,9 @@ class State:
         d.setdefault("dev_nonce", random.randint(0, 30000))
         d.setdefault("fcnt_up", 0)
         d.setdefault("fcnt_down", -1)
-        d.setdefault("mc_fcnt", {})  # dernier FCnt reçu par groupe multicast
+        # Dernier FCnt reçu par groupe multicast, indexé par McAddr (les anciennes versions
+        # indexaient par nom : un groupe recréé sous le même nom héritait du compteur)
+        d["mc_fcnt"] = {k: v for k, v in d.get("mc_fcnt", {}).items() if re.fullmatch(r"[0-9a-f]{8}", k)}
         return d
 
     def next_dev_nonce(self, dev_eui: str) -> int:

@@ -156,6 +156,11 @@ class Device:
             groups += self.fuota.groups.values()  # groupes créés à distance (TS005)
         return groups
 
+    def forget_multicast(self, mc_addr: str):
+        """Groupe supprimé ou recréé : oublie le dernier FCnt reçu sur ce McAddr."""
+        if self.st["mc_fcnt"].pop(mc_addr.lower(), None) is not None:
+            self.state.save()
+
     def _wake_if_active(self):
         if self.dev_addr is not None and not self.paused:
             self.wake.set()
@@ -429,7 +434,8 @@ class Device:
             self.log(f"multicast « {name} » perdu (perte simulée {self.mc_loss:.0%})", "warn")
             return
         counters = self.st["mc_fcnt"]
-        last = counters.get(name, -1)
+        key = group["mc_addr"].lower()  # par McAddr : un groupe recréé sous le même nom repart de zéro
+        last = counters.get(key, -1)
         dd = phy.parse_data_down(bytes.fromhex(group["mc_nwk_s_key"]), bytes.fromhex(group["mc_app_s_key"]),
                                  frame, last)
         if dd is None:
@@ -446,7 +452,7 @@ class Device:
         if dd.confirmed or not dd.fport:
             self.log(f"multicast « {name} » : trame non conforme (confirmée ou FPort 0), ignorée", "warn")
             return
-        counters[name] = dd.fcnt
+        counters[key] = dd.fcnt
         self.state.save()
         self.downlinks += 1
         self.last_down = time.time()

@@ -312,6 +312,8 @@ class Dashboard:
             }
         except ValueError as e:
             return web.json_response({"ok": False, "error": str(e)}, status=400)
+        for dev in self.medium.devices:
+            dev.forget_multicast(mc_addr)  # McAddr saisi à la main, déjà vu par un ancien groupe
         self.medium.groups.append(group)  # même liste que cfg["multicast_groups"]
         self._save()
         log("web", f"groupe multicast « {name} » créé (McAddr {mc_addr}) : à créer aussi dans ChirpStack", "ok")
@@ -320,6 +322,8 @@ class Dashboard:
     async def delete_group(self, request):
         group = self._group(request.match_info["name"])
         self.medium.groups.remove(group)
+        for dev in self.medium.devices:
+            dev.forget_multicast(group["mc_addr"])
         self._save()
         log("web", f"groupe multicast « {group['name']} » supprimé du simulateur "
             "(pensez à le supprimer dans ChirpStack)", "warn")
